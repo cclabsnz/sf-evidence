@@ -47,8 +47,8 @@
     "build:engine": "pnpm --filter @cclabsnz/sf-evidence-engine build",
     "clean": "rm -rf lib lib-test",
     "typecheck": "pnpm build:engine && tsc -p tsconfig.test.json",
-    "test:jest": "pnpm build:engine && node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
-    "test": "npm run typecheck && node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
+    "test:jest": "pnpm build:engine && node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test": "npm run typecheck && node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "prepack": "npm run build && oclif manifest",
     "postpack": "rm -f oclif.manifest.json"
   },

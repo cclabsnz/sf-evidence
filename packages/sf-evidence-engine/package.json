@@ -47,8 +47,8 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf lib lib-test",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test:jest": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
-    "test": "npm run typecheck && node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
+    "test:jest": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test": "npm run typecheck && node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "prepack": "npm run build"
   },
   "dependencies": {

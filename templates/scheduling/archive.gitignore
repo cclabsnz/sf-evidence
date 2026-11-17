@@ -1,0 +1,2 @@
+# sf-evidence: _state/ is a disposable cache and is never part of the chain.
+_state/

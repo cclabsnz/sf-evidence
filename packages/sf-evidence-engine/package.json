@@ -1,0 +1,66 @@
+{
+  "name": "@cclabsnz/sf-evidence-engine",
+  "version": "0.1.0",
+  "description": "Collection, hash chain, sinks and archive reading behind sf evidence: the read-only Salesforce audit-data archive format, usable without the sf CLI.",
+  "license": "Apache-2.0",
+  "author": "CloudCounsel Limited",
+  "homepage": "https://github.com/cclabsnz/sf-evidence#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cclabsnz/sf-evidence.git",
+    "directory": "packages/sf-evidence-engine"
+  },
+  "bugs": {
+    "url": "https://github.com/cclabsnz/sf-evidence/issues"
+  },
+  "keywords": [
+    "salesforce",
+    "setup-audit-trail",
+    "audit",
+    "compliance",
+    "evidence",
+    "retention",
+    "hash-chain"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./testing": {
+      "types": "./lib/testing/specVectors.d.ts",
+      "default": "./lib/testing/specVectors.js"
+    }
+  },
+  "files": [
+    "lib"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf lib lib-test",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test:jest": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
+    "test": "npm run typecheck && node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@cclabsnz/sf-core": "^0.3.0"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.4.1",
+    "@swc/core": "^1.15.47",
+    "@swc/jest": "^0.2.39",
+    "@types/jest": "^30",
+    "@types/node": "^26",
+    "jest": "^30",
+    "typescript": "^7.0.2"
+  }
+}

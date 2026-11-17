@@ -1,0 +1,76 @@
+# sf-evidence on Azure Pipelines.
+#
+# Put this file in an Azure Repos git repository that holds nothing but the archive, with
+# run-sf-evidence.sh copied to the repository root. Full setup: docs/run-on-a-schedule.md.
+#
+# Required:
+#   Variable group "sf-evidence" with SF_CLIENT_ID, SF_USERNAME, SF_INSTANCE_URL (secret or not).
+#   Secure file "sf-evidence-server.key": the PEM private key for the External Client App.
+#   The "<project> Build Service" identity needs Contribute on this repository, so the
+#   pipeline can push the archive commits.
+
+trigger: none
+pr: none
+
+schedules:
+  # Every 6 hours, UTC. always: true runs even when the repository has not changed.
+  - cron: '17 */6 * * *'
+    displayName: sf-evidence collect
+    branches:
+      include: [main]
+    always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: sf-evidence
+  - name: SF_EVIDENCE_VERSION
+    value: 0.1.0 # pin; upgrade deliberately
+  - name: SF_EVIDENCE_TARGET_ORG
+    value: evidence-org
+
+jobs:
+  - job: collect
+    timeoutInMinutes: 60
+    steps:
+      - checkout: self
+        fetchDepth: 0 # verify --anchor git reads the manifest commits' history
+        persistCredentials: true # lets the run push its commits
+
+      - task: NodeTool@0
+        inputs:
+          versionSpec: 22.x
+
+      - task: DownloadSecureFile@1
+        name: jwtKey
+        inputs:
+          secureFile: sf-evidence-server.key
+
+      - script: |
+          npm install --global @salesforce/cli
+          mkdir -p ~/.config/sf
+          echo '["@cclabsnz/sf-evidence"]' > ~/.config/sf/unsignedPluginAllowList.json
+          sf plugins install "@cclabsnz/sf-evidence@$(SF_EVIDENCE_VERSION)"
+        displayName: Install the Salesforce CLI and sf-evidence
+
+      - script: |
+          sf org login jwt --client-id "$SF_CLIENT_ID" --jwt-key-file "$(jwtKey.secureFilePath)" \
+            --username "$SF_USERNAME" --instance-url "$SF_INSTANCE_URL" \
+            --alias "$(SF_EVIDENCE_TARGET_ORG)"
+        displayName: Authenticate to Salesforce (JWT bearer)
+        env:
+          SF_CLIENT_ID: $(SF_CLIENT_ID)
+          SF_USERNAME: $(SF_USERNAME)
+          SF_INSTANCE_URL: $(SF_INSTANCE_URL)
+
+      - script: |
+          git checkout -B main
+          git config user.name "sf-evidence"
+          git config user.email "sf-evidence@pipelines.local"
+          bash ./run-sf-evidence.sh
+        displayName: Collect, push, status, verify
+        env:
+          SF_EVIDENCE_TARGET_ORG: $(SF_EVIDENCE_TARGET_ORG)
+          SF_EVIDENCE_ARCHIVE: .
+          SF_EVIDENCE_BRANCH: main

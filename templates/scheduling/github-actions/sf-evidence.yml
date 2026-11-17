@@ -1,0 +1,91 @@
+# sf-evidence on GitHub Actions.
+#
+# Put this file at .github/workflows/sf-evidence.yml in a PRIVATE repository that holds
+# nothing but the archive, with run-sf-evidence.sh copied to the repository root.
+# Setup, secrets and branch protection: docs/run-on-a-schedule.md in the sf-evidence repo.
+#
+# Required repository secrets:
+#   SF_CLIENT_ID      consumer key of the External Client App
+#   SF_USERNAME       username of the read-only integration user
+#   SF_INSTANCE_URL   https://<your-domain>.my.salesforce.com
+#   SF_JWT_KEY        PEM private key whose certificate is uploaded to the External Client App
+# Optional:
+#   SF_EVIDENCE_SIGNING_KEY  an SSH private key; when set, every manifest commit is signed and
+#                            verify requires signatures.
+
+name: sf-evidence
+
+on:
+  schedule:
+    # Every 6 hours. Setup Audit Trail needs one run a day; the limits snapshot is hourly at
+    # best and cannot be back-filled, so more runs mean more samples.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the archive commits back to this repository
+
+concurrency:
+  group: sf-evidence # two runs must never write the same chain at once
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SF_EVIDENCE_VERSION: 0.1.0 # pin; upgrade deliberately
+      SF_EVIDENCE_TARGET_ORG: evidence-org
+      SF_EVIDENCE_ARCHIVE: .
+      SF_EVIDENCE_SOURCES: audit-trail,limits
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # verify --anchor git reads the manifest commits' history
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the Salesforce CLI and sf-evidence
+        run: |
+          npm install --global @salesforce/cli
+          # sf-evidence is not signed with the Salesforce plugin-signing scheme. Allow-listing it
+          # by name skips the interactive trust prompt; the version is pinned above.
+          mkdir -p ~/.config/sf
+          echo '["@cclabsnz/sf-evidence"]' > ~/.config/sf/unsignedPluginAllowList.json
+          sf plugins install "@cclabsnz/sf-evidence@${SF_EVIDENCE_VERSION}"
+
+      - name: Authenticate to Salesforce (JWT bearer)
+        env:
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+          SF_INSTANCE_URL: ${{ secrets.SF_INSTANCE_URL }}
+          SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+        run: |
+          key="$RUNNER_TEMP/server.key"
+          printf '%s\n' "$SF_JWT_KEY" > "$key"
+          chmod 600 "$key"
+          sf org login jwt --client-id "$SF_CLIENT_ID" --jwt-key-file "$key" \
+            --username "$SF_USERNAME" --instance-url "$SF_INSTANCE_URL" \
+            --alias "$SF_EVIDENCE_TARGET_ORG"
+          rm -f "$key"
+
+      - name: Configure commit identity and optional signing
+        env:
+          SIGNING_KEY: ${{ secrets.SF_EVIDENCE_SIGNING_KEY }}
+        run: |
+          git config user.name "sf-evidence"
+          git config user.email "sf-evidence@users.noreply.github.com"
+          if [ -n "$SIGNING_KEY" ]; then
+            key="$RUNNER_TEMP/signing_key"
+            printf '%s\n' "$SIGNING_KEY" > "$key"
+            chmod 600 "$key"
+            git config gpg.format ssh
+            git config user.signingkey "$key"
+          fi
+
+      - name: Collect, push, status, verify
+        env:
+          SF_EVIDENCE_SIGN: ${{ secrets.SF_EVIDENCE_SIGNING_KEY != '' }}
+        run: bash ./run-sf-evidence.sh

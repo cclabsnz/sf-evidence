@@ -165,6 +165,14 @@ describe('buildExplanation', () => {
     expect(m).toMatch(/configuration is locked/i);
     expect(m).toMatch(/single SELECT/i);
     expect(m).toContain('packages/sf-evidence-query/test/unit/duckdb/sandbox.test.ts');
+    expect(m).toContain('INSTALL and LOAD');
+    expect(m).toContain('allowed_paths');
+    expect(m).toContain('enable_external_access');
+    expect(m).toContain('write_log');
+    expect(m).toContain('setseed');
+    expect(m).toContain('not a source-scan guarantee'.replace('not a', 'neither is a'));
+    expect(m).toContain('packages/sf-evidence-query/test/unit/invariants/invariants.test.ts');
+    expect(m).not.toMatch(/engine's own enforcement, exercised/);
     // The unreachable-by-lock query is never offered as evidence.
     expect(m).not.toMatch(/returns 0/);
   });

@@ -35,6 +35,10 @@
     "./testing": {
       "types": "./lib/testing/specVectors.d.ts",
       "default": "./lib/testing/specVectors.js"
+    },
+    "./testing/query": {
+      "types": "./lib/testing/queryFixture.d.ts",
+      "default": "./lib/testing/queryFixture.js"
     }
   },
   "files": [

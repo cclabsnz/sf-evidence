@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { compileDuckdbViews, type QueryFiles } from '@cclabsnz/sf-evidence-engine';
-import { asFileAccessRejection, guardStatement } from './guard.js';
+import { asFileAccessRejection, errorMessage, guardStatement } from './guard.js';
 
 /**
  * The only module that imports `@duckdb/node-api` (the dependency-boundary test enforces it), so
@@ -37,8 +37,7 @@ export async function loadDuckdb(
   try {
     return await load();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new QueryEngineUnavailable(`The DuckDB query engine could not be loaded: ${message}`);
+    throw new QueryEngineUnavailable(`The DuckDB query engine could not be loaded: ${errorMessage(err)}`);
   }
 }
 
@@ -139,18 +138,21 @@ function sessionOver(
   const port = {
     extract: (sql: string) => connection.extractStatements(sql),
     // DuckDB's own parser, before PRAGMA rewriting; the SQL is bound, never spliced.
-    parsesAsSelect: async (sql: string): Promise<boolean> => {
+    serialize: async (sql: string): Promise<string> => {
       const reader = await connection.runAndReadAll('SELECT json_serialize_sql(CAST($1 AS VARCHAR)) AS j', [sql]);
       const json = reader.getRowObjectsJson()[0]?.j;
-      if (typeof json !== 'string') return false;
-      const parsed = JSON.parse(json) as { error?: boolean; statements?: unknown[] };
-      return parsed.error === false && parsed.statements?.length === 1;
+      return typeof json === 'string' ? json : '';
     },
     statementType: (p: DuckDBPreparedStatement) => p.statementType as number,
+    destroy: (p: DuckDBPreparedStatement) => p.destroySync(),
   };
+  let closed = false;
 
   return {
     async run(sql: string, limit?: number): Promise<QueryResult> {
+      if (limit !== undefined && !(Number.isSafeInteger(limit) && limit >= 0)) {
+        throw new TypeError(`limit must be a non-negative integer, got ${String(limit)}.`);
+      }
       const prepared = await guardStatement(sql, port);
       try {
         // Streamed, so a limited query stops pulling rows once it has one past the limit. The
@@ -173,7 +175,10 @@ function sessionOver(
       const reader = await connection.runAndReadAll('SELECT version() AS v');
       return String(reader.getRowObjectsJson()[0]?.v);
     },
+    /** Idempotent: a second call (an error path after a normal close) is a no-op. */
     close(): void {
+      if (closed) return;
+      closed = true;
       connection.closeSync();
       instance.closeSync();
     },

@@ -307,14 +307,114 @@ describe('DuckDB sandbox session', () => {
 });
 
 /**
+ * SELECTs that are not read-only: DuckDB exposes engine controls as table functions, and after
+ * `lock_configuration` they still run. `enable_logging(storage='file', ...)` left every later
+ * query failing and made close() abort the process (libc++abi, exit 134) before the allowlist.
+ */
+describe('rejects side-effecting functions', () => {
+  const logPath = (): string => join(tmp, 'duck.log');
+  const cases: { label: string; sql: () => string }[] = [
+    { label: "enable_logging(level='trace')", sql: () => "SELECT * FROM enable_logging(level='trace')" },
+    { label: "enable_logging(storage='stdout')", sql: () => "SELECT * FROM enable_logging(storage='stdout')" },
+    {
+      label: "enable_logging(storage='file', storage_path=<tmp>)",
+      sql: () => `SELECT * FROM enable_logging(storage='file', storage_path='${logPath()}')`,
+    },
+    { label: 'enable_profiling()', sql: () => 'SELECT * FROM enable_profiling()' },
+    { label: 'disable_logging()', sql: () => 'SELECT * FROM disable_logging()' },
+    { label: 'checkpoint()', sql: () => 'SELECT * FROM checkpoint()' },
+    { label: "query('SELECT 1')", sql: () => "SELECT * FROM query('SELECT 1')" },
+    { label: "query_table('records')", sql: () => "SELECT * FROM query_table('records')" },
+    { label: 'main.ENABLE_LOGGING() (schema and case)', sql: () => 'SELECT * FROM main.ENABLE_LOGGING()' },
+    { label: 'in a CTE', sql: () => 'WITH x AS (SELECT * FROM enable_logging()) SELECT * FROM x' },
+    { label: 'in a subquery', sql: () => 'SELECT * FROM records WHERE 1 IN (SELECT 1 FROM enable_logging())' },
+    { label: 'in a UNION branch', sql: () => 'SELECT 1 UNION ALL SELECT 1 FROM enable_logging()' },
+    { label: 'in a join', sql: () => 'SELECT * FROM records JOIN enable_profiling() ON true' },
+    { label: 'scalar write_log()', sql: () => "SELECT write_log('x')" },
+    { label: 'scalar setseed()', sql: () => 'SELECT setseed(0.5)' },
+  ];
+
+  it.each(cases)('$label', async ({ sql }) => {
+    const s = await open();
+    const err = await s.run(sql()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StatementRejected);
+    expect((err as Error).message).toMatch(/\(\) (is not allowed; only read-only table functions|changes engine state; only read-only functions)/);
+    // Nothing changed: no log file, logging and profiling still off, and the session still answers.
+    expect(existsSync(logPath())).toBe(false);
+    const settings = await s.run(
+      "SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_logging','enable_profiling','logging_storage') ORDER BY name",
+    );
+    expect(settings.rows).toHaveLength(3);
+    for (const row of settings.rows) {
+      if (row.name === 'enable_logging') expect(String(row.value)).toMatch(/^(false|0)$/);
+      if (row.name === 'enable_profiling') expect(row.value).toBeNull();
+      if (row.name === 'logging_storage') expect(String(row.value)).toBe('memory');
+    }
+    expect(Number((await s.run('SELECT count(*) AS n FROM records')).rows[0]!.n)).toBe(5);
+    s.close();
+    session = undefined;
+    // Reaching this line means close() returned and the process is alive.
+    expect(true).toBe(true);
+  });
+
+  it('names the refused function', async () => {
+    const s = await open();
+    await expect(s.run('SELECT * FROM enable_profiling()')).rejects.toThrow(/table function enable_profiling\(\) is not allowed/);
+  });
+
+  it.each([
+    ['range(3)', 'SELECT * FROM range(3)', 3],
+    ['unnest([1,2])', 'SELECT * FROM unnest([1,2])', 2],
+    ['generate_series in a CTE', 'WITH g AS (SELECT * FROM generate_series(1, 4)) SELECT * FROM g', 4],
+  ] as const)('accepts %s', async (_label, sql, n) => {
+    const s = await open();
+    expect((await s.run(sql)).rows).toHaveLength(n);
+  });
+
+  it('accepts the duckdb_settings() catalog function', async () => {
+    const s = await open();
+    const r = await s.run("SELECT value FROM duckdb_settings() WHERE name = 'TimeZone'");
+    expect(r.rows).toEqual([{ value: 'Pacific/Auckland' }]);
+  });
+
+  it('accepts DESCRIBE, which parses over a show ref, not a table function', async () => {
+    const s = await open();
+    expect((await s.run('DESCRIBE records')).rows.length).toBeGreaterThan(0);
+  });
+});
+
+describe('session hygiene', () => {
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])('rejects limit %p with a TypeError', async (limit) => {
+    const s = await open();
+    await expect(s.run('SELECT 1', limit)).rejects.toThrow(TypeError);
+  });
+
+  it('accepts limit 0 and reports truncation', async () => {
+    const s = await open();
+    const r = await s.run('SELECT * FROM records', 0);
+    expect(r.rows).toEqual([]);
+    expect(r.truncated).toBe(true);
+  });
+
+  it('close() is idempotent', async () => {
+    const s = await open();
+    s.close();
+    expect(() => s.close()).not.toThrow();
+    session = undefined;
+  });
+});
+
+
+/**
  * Each guard layer on its own, through a fake port: against real DuckDB the parse check refuses
  * every listed statement first, so without these the count and prepared-type layers would be
  * untested defence in depth.
  */
 describe('guardStatement layers', () => {
-  function port(o: { count?: number; parses?: boolean; type?: number; prepareError?: Error }): GuardPort<{ t: number }> & { prepared: number } {
+  function port(o: { count?: number; parses?: boolean; type?: number; prepareError?: Error }): GuardPort<{ t: number }> & { prepared: number; destroyed: number } {
     const p = {
       prepared: 0,
+      destroyed: 0,
       extract: async () => ({
         count: o.count ?? 1,
         prepare: async () => {
@@ -323,8 +423,11 @@ describe('guardStatement layers', () => {
           return { t: o.type ?? 1 };
         },
       }),
-      parsesAsSelect: async () => o.parses ?? true,
+      serialize: async () => ((o.parses ?? true) ? '{"error":false,"statements":[{}]}' : '{"error":true}'),
       statementType: (x: { t: number }) => x.t,
+      destroy: () => {
+        p.destroyed += 1;
+      },
     };
     return p;
   }
@@ -332,6 +435,7 @@ describe('guardStatement layers', () => {
   it('refuses a prepared statement whose type is not SELECT even when the parse check passed', async () => {
     const p = port({ type: 7 });
     await expect(guardStatement('SELECT 1', p)).rejects.toThrow(/only SELECT.*statement type 7/);
+    expect(p.destroyed).toBe(1);
   });
 
   it('refuses more than one statement without preparing any', async () => {
@@ -352,6 +456,9 @@ describe('guardStatement layers', () => {
     ).rejects.toThrow(/file access/);
     const binder = new Error('Binder Error: no such column');
     await expect(guardStatement('SELECT 1', port({ prepareError: binder }))).rejects.toBe(binder);
+    // Anchored: a message merely mentioning the phrase is not a file-access denial.
+    const other = new Error('Binder Error: column "Permission Error" not found');
+    await expect(guardStatement('SELECT 1', port({ prepareError: other }))).rejects.toBe(other);
   });
 
   it('returns the prepared statement for one SELECT', async () => {

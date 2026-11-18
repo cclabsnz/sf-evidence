@@ -14,6 +14,15 @@
 // (SPEC.md §3.1, §5.1).
 export { ArchiveReader, type SourceSummary } from './archive/reader.js';
 export { resolveQueryFiles, type QueryFiles } from './archive/queryFiles.js';
+// The query views as data, and their compilation to DuckDB (design §5.5).
+export {
+  VIEWS,
+  type Dialect,
+  type ViewColumn,
+  type ViewColumnType,
+  type ViewDefinition,
+} from './query/views.js';
+export { compileDuckdbViews } from './query/compileDuckdb.js';
 export { formatStatus } from './lib/statusFormat.js';
 export {
   assessStatus,

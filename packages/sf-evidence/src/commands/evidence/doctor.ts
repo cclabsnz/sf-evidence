@@ -60,6 +60,7 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
       orgId: flags['org-id'],
       which,
       gitConfig: (key) => gitConfig(flags.archive, key),
+      extraChecks: () => this.hookChecks(),
       orgNow: target ? () => this.orgClock(target) : undefined,
     } satisfies DoctorEnv);
 
@@ -68,6 +69,27 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
     // Non-throwing, so --json keeps `result`.
     setExitCode(exit);
     return { checks, ok: exit === 0 };
+  }
+
+  /**
+   * Rows contributed by other plugins through the `sf-evidence:doctor-checks` hook (the query
+   * plugin's "Query engine" row). A hook that throws becomes one warning row named after its
+   * plugin: a broken add-on must not take `doctor` down, nor pass unnoticed.
+   */
+  protected async hookChecks(): Promise<Check[]> {
+    const { successes, failures } = await this.config.runHook('sf-evidence:doctor-checks', {});
+    return [
+      ...successes.flatMap((s) => s.result as Check[]),
+      ...failures.map(
+        (f): Check => ({
+          name: f.plugin.name,
+          level: 'warn',
+          detail: `its doctor check failed: ${f.error.message}`,
+          remediation: `Reinstall it with \`sf plugins install ${f.plugin.name}\`.`,
+          checked: true,
+        }),
+      ),
+    ];
   }
 
   /** The only place doctor resolves an org; reached only from an explicit --target-org. */

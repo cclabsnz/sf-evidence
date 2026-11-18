@@ -38,6 +38,11 @@ export interface DoctorEnv {
   which(cmd: string): Promise<string | null>;
   /** One `git config --get` value, or null when the key is unset. Throws when git could not look. */
   gitConfig(key: string): Promise<string | null>;
+  /**
+   * Rows contributed by other plugins (the query plugin's "Query engine" row arrives this way).
+   * Absent or empty means no such plugin answered, and doctor says the engine is not installed.
+   */
+  extraChecks?(): Promise<Check[]>;
   /** The org's clock. Supplied only when an org was named; absent means skew was not measured. */
   orgNow?(): Promise<Date>;
   /** The local clock; defaults to `new Date()`. */
@@ -60,7 +65,7 @@ export async function runChecks(env: DoctorEnv): Promise<Check[]> {
     checks.push(...(await gitChecks(env, archive.level === 'ok')));
   }
 
-  checks.push(await duckdbCheck(env));
+  checks.push(...(await queryEngineChecks(env)));
   checks.push(await clockCheck(env));
 
   // Listed, never omitted: a reader must be able to tell "passed" from "never looked".
@@ -195,16 +200,18 @@ async function signingCheck(env: DoctorEnv, haveGit: boolean, repoAccepted: bool
   };
 }
 
-async function duckdbCheck(env: DoctorEnv): Promise<Check> {
-  const path = await env.which('duckdb');
-  if (path) return { name: 'DuckDB on PATH', level: 'ok', detail: `${path} (version not checked)`, checked: true };
-  return {
-    name: 'DuckDB on PATH',
-    level: 'warn',
-    detail: 'needed from Phase 2 `query`; nothing in this release uses it',
-    remediation: 'Install DuckDB (https://duckdb.org) before you rely on `sf evidence query`.',
-    checked: true,
-  };
+/** An absent query plugin is not a fault: the placeholder is `ok` and unchecked, never a warning. */
+async function queryEngineChecks(env: DoctorEnv): Promise<Check[]> {
+  const extra = (await env.extraChecks?.()) ?? [];
+  if (extra.length > 0) return extra;
+  return [
+    {
+      name: 'Query engine',
+      level: 'ok',
+      detail: 'not installed (sf plugins install @cclabsnz/sf-evidence-query)',
+      checked: false,
+    },
+  ];
 }
 
 async function clockCheck(env: DoctorEnv): Promise<Check> {

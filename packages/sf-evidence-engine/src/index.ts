@@ -13,6 +13,7 @@
 // Archive reading — the only component permitted to assume the archive's on-disk layout
 // (SPEC.md §3.1, §5.1).
 export { ArchiveReader, type SourceSummary } from './archive/reader.js';
+export { resolveQueryFiles, type QueryFiles } from './archive/queryFiles.js';
 export { formatStatus } from './lib/statusFormat.js';
 export {
   assessStatus,

@@ -26,8 +26,11 @@ const COLLECTION_PATH = [
   'resolveOrgInfo', 'resolveSince', 'runCollect',
 ];
 
+/** Read-only record-file resolution behind `query`. */
+const QUERY = ['resolveQueryFiles'];
+
 describe('engine public API', () => {
   it('exports the CLI surface, the status assessment and the collection path, and nothing else', () => {
-    expect(Object.keys(api).sort()).toEqual([...CLI_SURFACE, ...STATUS_ASSESSMENT, ...COLLECTION_PATH, ...DIAGNOSTICS].sort());
+    expect(Object.keys(api).sort()).toEqual([...CLI_SURFACE, ...STATUS_ASSESSMENT, ...COLLECTION_PATH, ...DIAGNOSTICS, ...QUERY].sort());
   });
 });

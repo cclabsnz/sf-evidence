@@ -248,6 +248,14 @@ describe('sf evidence query', () => {
     expect(result!.rows.map((r) => r.source_id)).toEqual([FIXTURE.ids.a1, FIXTURE.ids.b1, FIXTURE.ids.a2, FIXTURE.ids.a3]);
   });
 
+  it('a view over a source the org has no files for exits 0 with zero rows', async () => {
+    // The fixture samples limits for org A only.
+    const { result, exit } = await query(['--org-id', FIXTURE.orgB, '--view', 'limit_samples', '--format', 'json']);
+    expect(exit).toBe(EXIT.OK);
+    expect(result!.rowCount).toBe(0);
+    expect(JSON.parse(out())).toEqual([]);
+  });
+
   it('zero rows exits 0', async () => {
     const { result, exit } = await query([...orgA, '--sql', 'SELECT * FROM setup_changes WHERE false', '--format', 'csv']);
     expect(exit).toBe(EXIT.OK);

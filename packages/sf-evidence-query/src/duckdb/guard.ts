@@ -166,7 +166,7 @@ export function asFileAccessRejection(err: unknown): unknown {
   const message = errorMessage(err);
   if (/^Permission Error/.test(message)) {
     return new StatementRejected(
-      `Query refused (file access): it reads a file or URL other than the archive's chain-covered record files. ${message}`,
+      `Query refused (file access): it reads a file or URL other than the archive's chain-covered record files. Query them through the records view. ${message}`,
     );
   }
   return err;

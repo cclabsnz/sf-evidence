@@ -1,5 +1,6 @@
 import type { Check, QueryFiles } from '@cclabsnz/sf-evidence-engine';
 import { openQuerySession, type QuerySession } from '../duckdb/session.js';
+import { errorMessage } from '../duckdb/guard.js';
 
 /**
  * The `sf-evidence:doctor-checks` hook (declared in package.json `oclif.hooks`): how this plugin
@@ -32,7 +33,8 @@ export async function queryEngineCheck(load?: Parameters<typeof openQuerySession
       {
         name: NAME,
         level: 'warn',
-        detail: `could not load: ${err instanceof Error ? err.message : String(err)}`,
+        // Structural, not `instanceof Error`: DuckDB's errors can come from another realm.
+        detail: `could not load: ${errorMessage(err)}`,
         remediation: 'Reinstall the query plugin with `sf plugins install @cclabsnz/sf-evidence-query`.',
         checked: true,
       },

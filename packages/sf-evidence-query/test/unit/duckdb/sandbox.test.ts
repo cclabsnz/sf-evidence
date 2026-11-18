@@ -455,6 +455,10 @@ describe('guardStatement layers', () => {
     await expect(
       guardStatement('SELECT 1', port({ prepareError: new Error('Permission Error: Cannot access file "/x"') })),
     ).rejects.toThrow(/file access/);
+    // Points the user at the supported route to the same records.
+    await expect(
+      guardStatement('SELECT 1', port({ prepareError: new Error('Permission Error: Cannot access file "/x"') })),
+    ).rejects.toThrow(/record files\. Query them through the records view\. Permission Error/);
     const binder = new Error('Binder Error: no such column');
     await expect(guardStatement('SELECT 1', port({ prepareError: binder }))).rejects.toBe(binder);
     // Anchored: a message merely mentioning the phrase is not a file-access denial.

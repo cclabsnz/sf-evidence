@@ -37,7 +37,7 @@ describe('timestamp rendering', () => {
     });
   });
 
-  it('renders TIMESTAMPTZ with the session zone offset at that instant, never Z', async () => {
+  it('renders TIMESTAMPTZ with the --timezone offset at that instant, never Z', async () => {
     const auck = await row(
       "SELECT TIMESTAMPTZ '2026-08-14 02:11:09Z' winter, TIMESTAMPTZ '2026-11-17 08:00:12.482Z' summer, '-infinity'::TIMESTAMPTZ inf",
     );

@@ -91,21 +91,41 @@ Exit 0 means the query ran, even if it returned no rows. Exit 1 means DuckDB cou
 load, the SQL was refused, or the SQL failed. Exit 2 is a usage error, such as two of
 `--sql`, `--file` and `--view` together.
 
-### Times: compare like with like
+### Times
 
 `*_utc` columns are UTC and print with `Z`. The event time in `setup_changes` and the
 sample time in `limit_samples` also come as `*_local` columns: the same instant in
 `--timezone`, printed with its offset, for example `2026-08-21T11:30:00+12:00`. The offset
 is right on each side of a daylight-saving change.
 
-There's one trap. `*_utc` columns are plain timestamps with no zone attached. If you
-compare one with a zoned value such as `now()` or `TIMESTAMPTZ '…'`, DuckDB reads the
-plain timestamp as `--timezone` local time first. In Auckland that shifts it by 12 or 13
-hours, and the query still runs without any error. So:
+Comparisons work in UTC, whichever zone you print in. `occurred_at_utc >= now() - INTERVAL 30 DAY`,
+`occurred_at_utc >= TIMESTAMP '2026-08-01'` and
+`occurred_at_utc >= TIMESTAMPTZ '2026-08-21 12:00:00+12'` all mean what they say.
 
-- compare `*_utc` columns with `TIMESTAMP '2026-08-01'` literals, which are UTC;
-- compare `*_local` columns with `now()` or `TIMESTAMPTZ '2026-08-21 12:00:00+12'`;
-- use `CAST(occurred_at_local AS DATE)` for the calendar day in `--timezone`.
+`--timezone` changes how `*_local` values print, not how SQL computes with them. Inside a
+query, `CAST(occurred_at_local AS DATE)`, `date_trunc`, `hour()` and the like all work in
+UTC. For the calendar day in your zone, convert first with `timezone()`:
+
+```bash
+sf evidence query --org-id 00D5j000000AbCdEAK --sql "
+SELECT occurred_at_utc, occurred_at_local,
+       CAST(occurred_at_local AS DATE) AS utc_day,
+       CAST(timezone('Pacific/Auckland', occurred_at_local) AS DATE) AS auckland_day
+FROM setup_changes
+ORDER BY occurred_at_utc"
+```
+
+```
+occurred_at_utc       occurred_at_local          utc_day     auckland_day
+────────────────────  ─────────────────────────  ──────────  ────────────
+2026-08-14T02:11:09Z  2026-08-14T14:11:09+12:00  2026-08-14  2026-08-14
+2026-08-20T23:30:00Z  2026-08-21T11:30:00+12:00  2026-08-20  2026-08-21
+2026-09-01T05:59:29Z  2026-09-01T17:59:29+12:00  2026-09-01  2026-09-01
+```
+
+The second row is 20 August in UTC and 21 August in Auckland. `timezone('Pacific/Auckland', …)`
+returns Auckland wall-clock time with no zone attached. Cast it to a `DATE`, or group on
+it. Don't print it as a timestamp: it would come out with a `Z` it doesn't deserve.
 
 ## Five worked questions
 
@@ -126,12 +146,11 @@ The rolling form, for your own archive:
 SELECT occurred_at_local, performed_by, recorded_as, action
 FROM setup_changes
 WHERE via_login_as
-  AND occurred_at_local >= now() - INTERVAL 30 DAY
+  AND occurred_at_utc >= now() - INTERVAL 30 DAY
 ORDER BY occurred_at_utc
 ```
 
-It compares `occurred_at_local` with `now()`, because both carry a zone. On the fixture,
-the 30 days before 1 September 2026:
+On the fixture, the 30 days before 1 September 2026:
 
 ```bash
 sf evidence query --org-id 00D5j000000AbCdEAK --sql "
@@ -214,7 +233,8 @@ Fixture UAT   2026-08-15T00:00:00Z  PermSetAssign  ops@fixture.example    Assign
 ```
 
 For a rolling previous quarter, use
-`occurred_at_local >= date_trunc('quarter', now()) - INTERVAL 3 MONTH AND occurred_at_local < date_trunc('quarter', now())`.
+`occurred_at_utc >= date_trunc('quarter', now()) - INTERVAL 3 MONTH AND occurred_at_utc < date_trunc('quarter', now())`.
+The quarter boundaries are UTC midnights.
 
 ### 3. Everything changed in the 48 hours before a date
 
@@ -257,11 +277,11 @@ sf evidence query --org-id 00D5j000000AbCdEAK --view setup_changes \
 `limits` takes one sample per `collect` run, at most one per UTC hour, so you get as
 many points per day as you run `collect`. Salesforce counts `DailyApiRequests` over a rolling 24 hours, so each sample
 is the usage over the 24 hours before it was taken, and the daily maximum is that day's
-peak:
+peak. `day` is the Auckland calendar day (see [Times](#times)):
 
 ```bash
 sf evidence query --org-id 00D5j000000AbCdEAK --sql "
-SELECT CAST(sampled_at_local AS DATE) AS day,
+SELECT CAST(timezone('Pacific/Auckland', sampled_at_local) AS DATE) AS day,
        max(used) AS peak_used,
        max(max)  AS daily_limit,
        count(*)  AS samples

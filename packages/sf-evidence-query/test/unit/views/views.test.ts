@@ -71,7 +71,7 @@ describe('setup_changes', () => {
     expect(row.section).toBeNull();
   });
 
-  it('renders local time with the offset of the session zone at that instant', async () => {
+  it('renders local time with the offset of --timezone at that instant', async () => {
     const auckland = await one(await open(), change(FIXTURE.ids.a1));
     expect(auckland.occurred_at_local).toBe('2026-08-14T14:11:09+12:00');
     expect(auckland.occurred_at_utc).toBe('2026-08-14T02:11:09Z');
@@ -80,6 +80,18 @@ describe('setup_changes', () => {
     const newYork = await one(await open([FIXTURE.orgA], 'America/New_York'), change(FIXTURE.ids.a1));
     expect(newYork.occurred_at_local).toBe('2026-08-13T22:11:09-04:00');
     expect(newYork.occurred_at_utc).toBe('2026-08-14T02:11:09Z');
+  });
+
+  // The session zone is UTC whatever --timezone says, so a naive *_utc value compared with a
+  // zoned one (now(), a TIMESTAMPTZ literal) is read as UTC. Under an Auckland session zone the
+  // same comparison silently shifted *_utc by 12 hours and dropped a1 from the first count.
+  it.each([
+    ["at a1's instant", "TIMESTAMPTZ '2026-08-14T02:11:09Z'", 3],
+    ["one second after a1's instant", "TIMESTAMPTZ '2026-08-14T02:11:10Z'", 2],
+    ['the same instant written with an Auckland offset', "TIMESTAMPTZ '2026-08-14 14:11:09+12'", 3],
+  ] as const)('compares occurred_at_utc with a zoned value %s exactly, under --timezone Pacific/Auckland', async (_label, bound, n) => {
+    const row = await one(await open([FIXTURE.orgA], 'Pacific/Auckland'), `SELECT count(*) AS n FROM setup_changes WHERE occurred_at_utc >= ${bound}`);
+    expect(Number(row.n)).toBe(n);
   });
 
   it('counts every org in a session over both', async () => {

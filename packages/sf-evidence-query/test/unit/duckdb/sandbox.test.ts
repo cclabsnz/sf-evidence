@@ -277,10 +277,11 @@ describe('DuckDB sandbox session', () => {
       expect(String(r.rows[0]!.max)).toMatch(/^0(\.0)? ?(bytes|B)$/i);
     });
 
-    it('applies the requested TimeZone, which the lock then pins', async () => {
+    it('pins the session TimeZone to UTC whatever --timezone is, so *_utc compares as UTC', async () => {
+      // open() passes timezone 'Pacific/Auckland'; that zone only renders *_local values.
       const s = await open();
       const r = await s.run("SELECT current_setting('TimeZone') AS tz");
-      expect(r.rows).toEqual([{ tz: 'Pacific/Auckland' }]);
+      expect(r.rows).toEqual([{ tz: 'UTC' }]);
     });
   });
 
@@ -374,7 +375,7 @@ describe('rejects side-effecting functions', () => {
   it('accepts the duckdb_settings() catalog function', async () => {
     const s = await open();
     const r = await s.run("SELECT value FROM duckdb_settings() WHERE name = 'TimeZone'");
-    expect(r.rows).toEqual([{ value: 'Pacific/Auckland' }]);
+    expect(r.rows).toEqual([{ value: 'UTC' }]);
   });
 
   it('accepts DESCRIBE, which parses over a show ref, not a table function', async () => {

@@ -97,9 +97,9 @@ function assertNoGlob(paths: Iterable<string>): void {
  * files in `files` (design §5.3). Every column is cast to its declared type, so a full view and
  * an empty stand-in describe the same.
  *
- * `timezone` is not emitted: `*_local` columns are TIMESTAMPTZ instants, and the session's
- * TimeZone (set to `--timezone` before the views are created) is what renders them. Converting
- * here would yield a naive TIMESTAMP and lose the offset.
+ * `timezone` is not emitted: `*_local` columns are TIMESTAMPTZ instants, which the query
+ * plugin's renderer prints in `--timezone` (the session TimeZone itself is always UTC).
+ * Converting here would yield a naive TIMESTAMP and lose the offset.
  */
 export function compileDuckdbViews(input: { files: QueryFiles; timezone: string }): string[] {
   assertNoGlob(Object.values(input.files.bySource).flat());

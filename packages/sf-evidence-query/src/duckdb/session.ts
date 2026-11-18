@@ -94,12 +94,12 @@ const MAX_MS = Date.UTC(9999, 11, 30);
  *
  * - TIMESTAMP (and its _S/_MS/_NS variants) is UTC wall time by the views' contract, so it
  *   prints as ISO `…Z`.
- * - TIMESTAMPTZ prints in the session zone with that instant's `±HH:MM` offset, never `Z`: the
+ * - TIMESTAMPTZ prints in `--timezone` with that instant's `±HH:MM` offset, never `Z`: the
  *   offset is the point of a `*_local` column. It is formatted here from the raw instant
- *   because `getRowObjectsJson` ignores the session TimeZone and labels every TIMESTAMPTZ with
- *   the Node process's current offset (an August Auckland instant printed `+13` from an NZDT
- *   host, where the truth is `+12`). The zone is pinned by `lock_configuration`, so the one the
- *   session was opened with is the one in force.
+ *   through Intl, so the output depends only on the zone given to this renderer, never on the
+ *   session TimeZone (which is UTC) or on `getRowObjectsJson`, which labels every TIMESTAMPTZ
+ *   with the Node process's current offset (an August Auckland instant printed `+13` from an
+ *   NZDT host, where the truth is `+12`).
  */
 class RowRenderer {
   private readonly wall: Intl.DateTimeFormat;
@@ -252,8 +252,12 @@ class RowRenderer {
  *    never created, so nothing is read from or written to `~/.duckdb`.
  * 2. `max_temp_directory_size = '0B'`, the second half of spill-off. It only takes effect via
  *    SET (as a create option it is ignored), and only before any query uses the temp directory.
- * 3. `TimeZone`, which DuckDB uses for TIMESTAMPTZ casts and date parts and `RowRenderer` prints
- *    TIMESTAMPTZ in; the lock then pins it.
+ * 3. `TimeZone = 'UTC'`, always, whatever `--timezone` is; the lock then pins it. DuckDB casts a
+ *    naive TIMESTAMP to TIMESTAMPTZ in this zone whenever the two meet, so with any other zone
+ *    `occurred_at_utc >= now() - INTERVAL 30 DAY` would silently read the UTC wall time as local
+ *    time and shift it by the offset. The cost: date functions and casts on `*_local` columns
+ *    (`date_trunc`, `hour`, `::DATE`) work in UTC. `--timezone` only reaches `RowRenderer`, which
+ *    prints `*_local` values in it.
  * 4. The views. DuckDB checks their files exist at CREATE time, which needs file access on.
  * 5. `allowed_paths` = every file in `files.bySource` and nothing else. It must be set before
  *    external access goes off; DuckDB refuses to change it afterwards. It is an exact-file list
@@ -289,7 +293,7 @@ export async function openQuerySession(opts: {
   try {
     connection = await instance.connect();
     await connection.run("SET max_temp_directory_size = '0B'");
-    await connection.run(`SET TimeZone = ${lit(opts.timezone)}`);
+    await connection.run("SET TimeZone = 'UTC'");
     for (const view of views) await connection.run(view);
     await connection.run(`SET allowed_paths = [${allowed.map(lit).join(', ')}]::VARCHAR[]`);
     await connection.run('SET allowed_directories = []::VARCHAR[]');

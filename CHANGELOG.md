@@ -9,8 +9,9 @@
   templates are unchanged and install only `@cclabsnz/sf-evidence`.
 - Three views: `setup_changes` (with Login-As resolved into `performed_by` and
   `recorded_as`), `limit_samples` and `records`. `--view` prints one, with `--from` and
-  `--to`. Output as `table`, `json`, `csv` or `ndjson`. `*_local` columns use `--timezone`,
-  default `Pacific/Auckland`. `docs/query-views.md` lists every column, and
+  `--to`. Output as `table`, `json`, `csv` or `ndjson`. `*_local` columns print in `--timezone`,
+  default `Pacific/Auckland`; SQL itself always computes in UTC, so comparing `*_utc` with
+  `now()` is exact. `docs/query-views.md` lists every column, and
   `docs/query.md` works through five questions.
 - `query` reads only the record files the hash chain covers. Orphan files are left out and
   counted in a warning. DuckDB runs with extensions, spilling and file access outside those

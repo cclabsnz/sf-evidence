@@ -20,8 +20,7 @@ const SRC_DIR = join(process.cwd(), 'src');
 describe('product invariants', () => {
   it('scans a non-trivial number of source files', () => {
     // Guards against the scan silently matching nothing and the suite passing vacuously.
-    // Floor is 1 while the plugin is scaffolded; Task 7 raises it to 2.
-    expect(collectSourceFiles(SRC_DIR).length).toBeGreaterThanOrEqual(1);
+    expect(collectSourceFiles(SRC_DIR).length).toBeGreaterThanOrEqual(2);
   });
 
   it('C1: contains no org-mutating API calls anywhere in src/', () => {

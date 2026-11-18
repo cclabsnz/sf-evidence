@@ -17,6 +17,21 @@ export interface DoctorResult {
   ok: boolean;
 }
 
+const malformed = (name: string, detail: string): Check => ({ name, level: 'warn', detail, checked: true });
+
+/** The shape `formatChecks` and `doctorExitCode` dereference; a plugin's rows are untrusted input. */
+function isCheck(v: unknown): v is Check {
+  if (typeof v !== 'object' || v === null) return false;
+  const c = v as Record<string, unknown>;
+  return (
+    typeof c.name === 'string' &&
+    typeof c.detail === 'string' &&
+    (c.level === 'ok' || c.level === 'warn' || c.level === 'fail') &&
+    typeof c.checked === 'boolean' &&
+    (c.remediation === undefined || typeof c.remediation === 'string')
+  );
+}
+
 export default class EvidenceDoctor extends SfCommand<DoctorResult> {
   public static readonly summary = 'Check this machine and archive are ready to collect evidence';
 
@@ -73,23 +88,38 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
 
   /**
    * Rows contributed by other plugins through the `sf-evidence:doctor-checks` hook (the query
-   * plugin's "Query engine" row). A hook that throws becomes one warning row named after its
-   * plugin: a broken add-on must not take `doctor` down, nor pass unnoticed.
+   * plugin's "Query engine" row). Nothing a plugin does may take `doctor` down or pass unnoticed:
+   * a hook that throws, a runHook that rejects, and a result that is not an array of well-formed
+   * rows each become one warning row. A `fail` a plugin reports itself is kept as it is.
    */
   protected async hookChecks(): Promise<Check[]> {
-    const { successes, failures } = await this.config.runHook('sf-evidence:doctor-checks', {});
-    return [
-      ...successes.flatMap((s) => s.result as Check[]),
-      ...failures.map(
-        (f): Check => ({
-          name: f.plugin.name,
-          level: 'warn',
-          detail: `its doctor check failed: ${f.error.message}`,
-          remediation: `Reinstall it with \`sf plugins install ${f.plugin.name}\`.`,
-          checked: true,
-        }),
-      ),
-    ];
+    let ran: Awaited<ReturnType<typeof this.config.runHook>>;
+    try {
+      ran = await this.config.runHook('sf-evidence:doctor-checks', {});
+    } catch (err) {
+      return [malformed('Doctor hook', `the hook could not run: ${err instanceof Error ? err.message : String(err)}`)];
+    }
+    const rows: Check[] = [];
+    for (const s of ran.successes) {
+      const who = `Doctor hook (${s.plugin.name})`;
+      if (!Array.isArray(s.result)) {
+        rows.push(malformed(who, 'malformed result: expected an array of checks'));
+        continue;
+      }
+      for (const row of s.result as unknown[]) {
+        rows.push(isCheck(row) ? row : malformed(who, 'malformed result: an entry is not a well-formed check'));
+      }
+    }
+    for (const f of ran.failures) {
+      rows.push({
+        name: f.plugin.name,
+        level: 'warn',
+        detail: `its doctor check failed: ${f.error.message}`,
+        remediation: `Reinstall it with \`sf plugins install ${f.plugin.name}\`.`,
+        checked: true,
+      });
+    }
+    return rows;
   }
 
   /** The only place doctor resolves an org; reached only from an explicit --target-org. */

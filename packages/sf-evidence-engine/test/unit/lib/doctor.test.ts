@@ -192,7 +192,7 @@ describe('doctor', () => {
     const checks = await runChecks(env());
     expect(find(checks, 'node').checked).toBe(true);
     expect(find(checks, 'archive').checked).toBe(true);
-      });
+  });
 
   it('renders one line per check, skipped rows as skipped, remediation beneath', async () => {
     const lines = formatChecks([

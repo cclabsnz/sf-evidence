@@ -14,6 +14,10 @@ type DuckDBInstance = import('@duckdb/node-api').DuckDBInstance;
 type DuckDBConnection = import('@duckdb/node-api').DuckDBConnection;
 type DuckDBPreparedStatement = import('@duckdb/node-api').DuckDBPreparedStatement;
 type DuckDBResultReader = import('@duckdb/node-api').DuckDBResultReader;
+type DuckDBType = import('@duckdb/node-api').DuckDBType;
+type DuckDBListType = import('@duckdb/node-api').DuckDBListType;
+type DuckDBStructType = import('@duckdb/node-api').DuckDBStructType;
+type DuckDBMapType = import('@duckdb/node-api').DuckDBMapType;
 
 /** DuckDB's native binding could not be loaded (missing prebuilt binary, unsupported platform, ...). */
 export class QueryEngineUnavailable extends Error {
@@ -61,13 +65,179 @@ function lit(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
+/** Fractional seconds: none when zero, `.mmm` when only milliseconds are set, else every digit DuckDB kept. */
+function fraction(digits: string): string {
+  const d = digits.replace(/0+$/, '');
+  if (d === '') return '';
+  return `.${d.padEnd(d.length <= 3 ? 3 : d.length <= 6 ? 6 : 9, '0')}`;
+}
+
+/** DuckDB's naive timestamp text, `YYYY-MM-DD HH:MM:SS[.f]`. BC dates and infinities do not match and pass through. */
+const NAIVE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d+))?$/;
+
+/** Floor division, so an instant before 1970 still splits into whole seconds plus a non-negative remainder. */
+function floorDiv(a: bigint, b: bigint): bigint {
+  const q = a / b;
+  return a % b !== 0n && a < 0n !== b < 0n ? q - 1n : q;
+}
+
+/** The instants `Date` and `Intl` render faithfully: years 0001 to 9999 UTC, with a day's margin for the offset. */
+const MIN_MS = new Date('0001-01-02T00:00:00Z').getTime();
+const MAX_MS = Date.UTC(9999, 11, 30);
+
 /**
- * Rows as JSON-safe objects. The single place results are converted, so value rendering
- * (timestamps, BIGINT/DECIMAL strings) has one home. `getRowObjectsJson` renders BIGINT, HUGEINT
- * and DECIMAL as strings and TIMESTAMPTZ in the session TimeZone (DUCKDB-FACTS.md).
+ * Renders one result's values for JSON output (design §5.6). Built on `getRowObjectsJson`, which
+ * already gives BIGINT, HUGEINT and DECIMAL as precise strings; only timestamps are rewritten,
+ * at any depth inside LIST, ARRAY, STRUCT and MAP.
+ *
+ * - TIMESTAMP (and its _S/_MS/_NS variants) is UTC wall time by the views' contract, so it
+ *   prints as ISO `…Z`.
+ * - TIMESTAMPTZ prints in the session zone with that instant's `±HH:MM` offset, never `Z`: the
+ *   offset is the point of a `*_local` column. It is formatted here from the raw instant
+ *   because `getRowObjectsJson` ignores the session TimeZone and labels every TIMESTAMPTZ with
+ *   the Node process's current offset (an August Auckland instant printed `+13` from an NZDT
+ *   host, where the truth is `+12`). The zone is pinned by `lock_configuration`, so the one the
+ *   session was opened with is the one in force.
  */
-function toRows(reader: DuckDBResultReader): Record<string, unknown>[] {
-  return reader.getRowObjectsJson() as Record<string, unknown>[];
+class RowRenderer {
+  private readonly wall: Intl.DateTimeFormat;
+
+  public constructor(
+    private readonly ids: DuckDbModule['DuckDBTypeId'],
+    timezone: string,
+  ) {
+    this.wall = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  public rows(reader: DuckDBResultReader): Record<string, unknown>[] {
+    const json = reader.getRowObjectsJson() as Record<string, unknown>[];
+    const types = reader.columnTypes();
+    const names = reader.columnNames();
+    const touched = types.map((t) => this.hasTimestamp(t));
+    if (!touched.some(Boolean)) return json;
+    // Raw values carry a TIMESTAMPTZ's exact instant; only fetched when one is in the result.
+    const raw = types.some((t) => this.hasTimestampTz(t)) ? (reader.getRowObjects() as Record<string, unknown>[]) : undefined;
+    return json.map((row, r) => {
+      const out = { ...row };
+      names.forEach((name, c) => {
+        if (touched[c]) out[name] = this.value(types[c]!, row[name], raw?.[r]?.[name]);
+      });
+      return out;
+    });
+  }
+
+  private value(type: DuckDBType, json: unknown, raw: unknown): unknown {
+    if (json === null || json === undefined) return json;
+    const ids = this.ids;
+    switch (type.typeId) {
+      case ids.TIMESTAMP:
+      case ids.TIMESTAMP_S:
+      case ids.TIMESTAMP_MS:
+      case ids.TIMESTAMP_NS:
+        return this.naive(json);
+      case ids.TIMESTAMP_TZ:
+        return this.zoned(json, raw);
+      case ids.LIST:
+      case ids.ARRAY: {
+        const item = (type as DuckDBListType).valueType;
+        const items = (raw as { items?: unknown[] } | undefined)?.items;
+        return Array.isArray(json) ? json.map((v, i) => this.value(item, v, items?.[i])) : json;
+      }
+      case ids.STRUCT: {
+        const st = type as DuckDBStructType;
+        const entries = (raw as { entries?: Record<string, unknown> } | undefined)?.entries;
+        const obj = { ...(json as Record<string, unknown>) };
+        st.entryNames.forEach((n, i) => {
+          if (n in obj) obj[n] = this.value(st.entryTypes[i]!, obj[n], entries?.[n]);
+        });
+        return obj;
+      }
+      case ids.MAP: {
+        const mt = type as DuckDBMapType;
+        const entries = (raw as { entries?: { key: unknown; value: unknown }[] } | undefined)?.entries;
+        return Array.isArray(json)
+          ? (json as { key: unknown; value: unknown }[]).map((e, i) => ({
+              key: this.value(mt.keyType, e.key, entries?.[i]?.key),
+              value: this.value(mt.valueType, e.value, entries?.[i]?.value),
+            }))
+          : json;
+      }
+      default:
+        return json;
+    }
+  }
+
+  private naive(json: unknown): unknown {
+    const m = typeof json === 'string' ? NAIVE.exec(json) : null;
+    return m ? `${m[1]}T${m[2]}${fraction(m[3] ?? '')}Z` : json;
+  }
+
+  private zoned(json: unknown, raw: unknown): unknown {
+    const micros = (raw as { micros?: unknown } | undefined)?.micros;
+    if (typeof micros !== 'bigint') return json;
+    const seconds = floorDiv(micros, 1_000_000n);
+    const ms = Number(seconds) * 1000;
+    // Infinities and instants outside Date's faithful range keep DuckDB's own text.
+    if (!(ms >= MIN_MS && ms <= MAX_MS)) return json;
+    const parts: Record<string, string> = {};
+    for (const p of this.wall.formatToParts(new Date(ms))) parts[p.type] = p.value;
+    const year = Number(parts.year);
+    const [mo, d, h, mi, s] = [parts.month, parts.day, parts.hour, parts.minute, parts.second].map(Number) as [number, number, number, number, number];
+    // setUTCFullYear, not Date.UTC, which would read years 1-99 as 1901-1999.
+    const asUtc = new Date(0);
+    asUtc.setUTCFullYear(year, mo - 1, d);
+    asUtc.setUTCHours(h, mi, s);
+    const offset = Math.round((asUtc.getTime() - ms) / 1000);
+    const abs = Math.abs(offset);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    // Historical local mean times have offsets with seconds; print them rather than lie in ±HH:MM.
+    const off = `${offset < 0 ? '-' : '+'}${pad(Math.floor(abs / 3600))}:${pad(Math.floor(abs / 60) % 60)}${abs % 60 === 0 ? '' : `:${pad(abs % 60)}`}`;
+    const frac = fraction(String(micros - seconds * 1_000_000n).padStart(6, '0'));
+    return `${String(year).padStart(4, '0')}-${pad(mo)}-${pad(d)}T${pad(h)}:${pad(mi)}:${pad(s)}${frac}${off}`;
+  }
+
+  private hasTimestamp(type: DuckDBType): boolean {
+    const ids = this.ids;
+    switch (type.typeId) {
+      case ids.TIMESTAMP:
+      case ids.TIMESTAMP_S:
+      case ids.TIMESTAMP_MS:
+      case ids.TIMESTAMP_NS:
+      case ids.TIMESTAMP_TZ:
+        return true;
+      default:
+        return this.children(type).some((t) => this.hasTimestamp(t));
+    }
+  }
+
+  private hasTimestampTz(type: DuckDBType): boolean {
+    return type.typeId === this.ids.TIMESTAMP_TZ || this.children(type).some((t) => this.hasTimestampTz(t));
+  }
+
+  /** The nested types `value` descends into; other containers (UNION) are left as DuckDB renders them. */
+  private children(type: DuckDBType): readonly DuckDBType[] {
+    const ids = this.ids;
+    switch (type.typeId) {
+      case ids.LIST:
+      case ids.ARRAY:
+        return [(type as DuckDBListType).valueType];
+      case ids.STRUCT:
+        return (type as DuckDBStructType).entryTypes;
+      case ids.MAP:
+        return [(type as DuckDBMapType).keyType, (type as DuckDBMapType).valueType];
+      default:
+        return [];
+    }
+  }
 }
 
 /**
@@ -80,7 +250,8 @@ function toRows(reader: DuckDBResultReader): Record<string, unknown>[] {
  *    never created, so nothing is read from or written to `~/.duckdb`.
  * 2. `max_temp_directory_size = '0B'`, the second half of spill-off. It only takes effect via
  *    SET (as a create option it is ignored), and only before any query uses the temp directory.
- * 3. `TimeZone`, which renders every TIMESTAMPTZ; the lock then pins it.
+ * 3. `TimeZone`, which DuckDB uses for TIMESTAMPTZ casts and date parts and `RowRenderer` prints
+ *    TIMESTAMPTZ in; the lock then pins it.
  * 4. The views. DuckDB checks their files exist at CREATE time, which needs file access on.
  * 5. `allowed_paths` = every file in `files.bySource` and nothing else. It must be set before
  *    external access goes off; DuckDB refuses to change it afterwards. It is an exact-file list
@@ -128,12 +299,13 @@ export async function openQuerySession(opts: {
     instance.closeSync();
     throw err;
   }
-  return sessionOver(instance, connection);
+  return sessionOver(instance, connection, new RowRenderer(duckdb.DuckDBTypeId, opts.timezone));
 }
 
 function sessionOver(
   instance: DuckDBInstance,
   connection: DuckDBConnection,
+  renderer: RowRenderer,
 ): QuerySession {
   const port = {
     extract: (sql: string) => connection.extractStatements(sql),
@@ -162,7 +334,7 @@ function sessionOver(
         const names = reader.columnNames();
         const types = reader.columnTypes();
         const columns = names.map((name, i) => ({ name, type: types[i]!.toString() }));
-        const rows = toRows(reader);
+        const rows = renderer.rows(reader);
         const truncated = limit !== undefined && rows.length > limit;
         return { columns, rows: truncated ? rows.slice(0, limit) : rows, truncated };
       } catch (err) {

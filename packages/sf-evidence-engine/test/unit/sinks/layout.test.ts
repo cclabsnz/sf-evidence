@@ -1,9 +1,12 @@
+import { join } from 'node:path';
 import {
   orgPrefix,
   recordFilePath,
   manifestPath,
   headPath,
   statePath,
+  parseOrgDir,
+  absoluteRecordPath,
 } from '../../../src/sinks/layout.js';
 
 const ORG = '00D5j000000AbCdEAK';
@@ -78,5 +81,17 @@ describe('layout', () => {
     expect(() => manifestPath(ORG, 0)).toThrow(/sequence/i);
     expect(() => manifestPath(ORG, -1)).toThrow(/sequence/i);
     expect(() => manifestPath(ORG, 1.5)).toThrow(/sequence/i);
+  });
+
+  it('parseOrgDir extracts an 18-char org id and rejects everything else', () => {
+    expect(parseOrgDir(`org_id=${ORG}`)).toBe(ORG);
+    expect(parseOrgDir('org_id=short')).toBeNull();
+    expect(parseOrgDir(ORG)).toBeNull();
+  });
+
+  it('absoluteRecordPath joins with platform separators', () => {
+    expect(absoluteRecordPath('/r', `org_id=${ORG}/source=x/f.ndjson`)).toBe(
+      join('/r', `org_id=${ORG}`, 'source=x', 'f.ndjson'),
+    );
   });
 });

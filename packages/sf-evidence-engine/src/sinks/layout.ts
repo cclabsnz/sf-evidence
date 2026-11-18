@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { monthKey } from '../lib/time.js';
 import type { SourceId } from '../types/record.js';
 
@@ -17,6 +18,29 @@ export function orgPrefix(orgId: string): string {
     throw new Error(`Invalid org id: ${orgId} (expected 18 alphanumeric characters).`);
   }
   return `org_id=${orgId}`;
+}
+
+/**
+ * Inverse of `orgPrefix` for a directory name: the org id, or null for anything that is not
+ * an `org_id=<18 alphanumerics>` partition. Null rather than a throw because callers scan
+ * directory listings, where `_tmp`, stray files and malformed names are expected noise and
+ * must be skipped, not fatal. Lives here so this module stays the only one that knows the
+ * Hive spelling.
+ */
+export function parseOrgDir(name: string): string | null {
+  const prefix = 'org_id=';
+  if (!name.startsWith(prefix)) return null;
+  const id = name.slice(prefix.length);
+  return ORG_ID_RE.test(id) ? id : null;
+}
+
+/**
+ * An archive-relative path (always forward slashes, as manifests record it) joined onto an
+ * absolute root with the platform's separator. Splitting then joining, rather than string
+ * concatenation, keeps Windows roots correct and `join` normalises any stray `..` segments.
+ */
+export function absoluteRecordPath(root: string, relPath: string): string {
+  return join(root, ...relPath.split('/'));
 }
 
 export interface RecordPathArgs {

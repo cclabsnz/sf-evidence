@@ -109,4 +109,16 @@ export interface Sink {
    * anchored, and never read by `verify`.
    */
   writeState(orgId: string, name: string, json: string): Promise<void>;
+
+  /**
+   * The absolute filesystem root of the archive for sinks that live on local disk, or null
+   * for network sinks. The `query` command uses a non-null root to expose the archive to
+   * DuckDB read-only; null means "not queryable in place", never "empty".
+   */
+  queryRoot(): string | null;
+  /**
+   * Org ids that have a partition in this sink, sorted ascending. Entries that are not
+   * `org_id=<18 alphanumerics>` directories are ignored; an absent root yields `[]`.
+   */
+  listOrgs(): Promise<string[]>;
 }

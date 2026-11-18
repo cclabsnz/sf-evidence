@@ -1,6 +1,6 @@
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { LocalSink } from '../../../src/sinks/local.js';
 import { buildBatch, manifestHash } from '../../../src/chain/manifestBuilder.js';
 import { GENESIS_PREV } from '../../../src/types/manifest.js';
@@ -255,5 +255,21 @@ describe('LocalSink', () => {
     await sink.putBatch(batch(1, GENESIS_PREV));
     await sink.writeState(ORG_ID, 'coverage.ndjson', '{}');
     await expect(sink.listOrphans(ORG_ID)).resolves.toEqual([]);
+  });
+
+  it('queryRoot returns the absolute root', () => {
+    expect(new LocalSink('./x').queryRoot()).toBe(resolve('./x'));
+  });
+
+  it('listOrgs lists org partitions only', async () => {
+    await mkdir(join(root, 'org_id=00D5j000000AbCdEAK'));
+    await mkdir(join(root, 'org_id=bad'));
+    await mkdir(join(root, '_tmp'));
+    await writeFile(join(root, 'archive.json'), '{}');
+    await expect(new LocalSink(root).listOrgs()).resolves.toEqual(['00D5j000000AbCdEAK']);
+  });
+
+  it('listOrgs on a missing root returns []', async () => {
+    await expect(new LocalSink(join(root, 'nope')).listOrgs()).resolves.toEqual([]);
   });
 });

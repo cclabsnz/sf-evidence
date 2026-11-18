@@ -1,0 +1,87 @@
+{
+  "name": "@cclabsnz/sf-evidence-query",
+  "version": "0.2.0",
+  "description": "Query an sf-evidence archive with SQL: a sandboxed, read-only DuckDB `sf evidence query` command for the sf CLI.",
+  "license": "Apache-2.0",
+  "author": "CloudCounsel Limited",
+  "homepage": "https://github.com/cclabsnz/sf-evidence#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cclabsnz/sf-evidence.git",
+    "directory": "packages/sf-evidence-query"
+  },
+  "bugs": {
+    "url": "https://github.com/cclabsnz/sf-evidence/issues"
+  },
+  "keywords": [
+    "sfdx-plugin",
+    "sf-plugin",
+    "salesforce",
+    "setup-audit-trail",
+    "audit",
+    "compliance",
+    "evidence",
+    "duckdb",
+    "sql"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "oclif.manifest.json"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:engine": "pnpm --filter @cclabsnz/sf-evidence-engine build",
+    "clean": "rm -rf lib lib-test",
+    "typecheck": "pnpm build:engine && tsc -p tsconfig.test.json",
+    "test:jest": "pnpm build:engine && node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test": "npm run typecheck && node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "prepack": "npm run build && oclif manifest",
+    "postpack": "rm -f oclif.manifest.json"
+  },
+  "dependencies": {
+    "@cclabsnz/sf-core": "^0.3.0",
+    "@cclabsnz/sf-evidence-engine": "workspace:^",
+    "@duckdb/node-api": "1.5.6-r.2",
+    "@oclif/core": "^5",
+    "@salesforce/sf-plugins-core": "^13"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.4.1",
+    "@swc/core": "^1.15.47",
+    "@swc/jest": "^0.2.39",
+    "@types/jest": "^30",
+    "@types/node": "^26",
+    "jest": "^30",
+    "oclif": "^4.24.0",
+    "typescript": "^7.0.2"
+  },
+  "oclif": {
+    "bin": "sf",
+    "dirname": "sf",
+    "commands": "./lib/commands",
+    "pluginType": "jit",
+    "flexibleTaxonomy": true,
+    "topics": {
+      "evidence": {
+        "description": "Extract and archive Salesforce audit data you are about to lose"
+      }
+    },
+    "hooks": {
+      "sf-evidence:doctor-checks": "./lib/hooks/doctorChecks.js"
+    }
+  }
+}

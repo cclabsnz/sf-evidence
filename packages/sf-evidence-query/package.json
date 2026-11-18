@@ -53,7 +53,6 @@
     "postpack": "rm -f oclif.manifest.json"
   },
   "dependencies": {
-    "@cclabsnz/sf-core": "^0.3.0",
     "@cclabsnz/sf-evidence-engine": "workspace:^",
     "@duckdb/node-api": "1.5.6-r.2",
     "@oclif/core": "^5",
@@ -61,6 +60,7 @@
     "@salesforce/sf-plugins-core": "^13"
   },
   "devDependencies": {
+    "@cclabsnz/sf-core": "^0.3.0",
     "@jest/globals": "^30.4.1",
     "@swc/core": "^1.15.47",
     "@swc/jest": "^0.2.39",

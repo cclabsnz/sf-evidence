@@ -72,6 +72,27 @@ function emptyView(view: ViewDefinition): string {
 }
 
 /**
+ * DuckDB treats `*`, `?` and `[...]` inside every `read_ndjson` list entry as a glob, so a
+ * user-chosen archive root such as `/x/[prod]/arch` would read different files, or none,
+ * instead of exactly the manifest-referenced ones. Bracket-class escaping (`[[]`) does read the
+ * literal file, but only before lockdown: once `enable_external_access=false`, DuckDB still
+ * treats the escaped entry as a glob and refuses it with a Permission Error. So there is no
+ * usable escape, and such paths are rejected. `{` `}` are not expanded by DuckDB 1.5.6 but are
+ * rejected with the rest, so no future brace globbing can widen a view.
+ */
+const GLOB_CHARS = /[*?[\]{}]/;
+
+function assertNoGlob(paths: Iterable<string>): void {
+  for (const p of paths) {
+    if (GLOB_CHARS.test(p)) {
+      throw new Error(
+        `Cannot query record file ${p}: its path contains a glob character (* ? [ ] { }), which DuckDB would expand as a pattern instead of reading that file. Move or link the archive to a path without these characters, then re-run.`,
+      );
+    }
+  }
+}
+
+/**
  * `CREATE VIEW` statements for every view in `VIEWS`, in order, over exactly the chain-covered
  * files in `files` (design §5.3). Every column is cast to its declared type, so a full view and
  * an empty stand-in describe the same.
@@ -81,6 +102,7 @@ function emptyView(view: ViewDefinition): string {
  * here would yield a naive TIMESTAMP and lose the offset.
  */
 export function compileDuckdbViews(input: { files: QueryFiles; timezone: string }): string[] {
+  assertNoGlob(Object.values(input.files.bySource).flat());
   const labels = labelRelation(input.files.orgLabels);
   return VIEWS.map((view) => {
     const paths = [...new Set(view.sources.flatMap((s) => input.files.bySource[s] ?? []))].sort();

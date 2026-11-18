@@ -102,6 +102,24 @@ describe('compileDuckdbViews', () => {
     expect(s).not.toContain("Jo's");
   });
 
+  it.each(['*', '?', '[', ']', '{', '}'])(
+    'rejects a record file path containing the glob character %s, naming the path',
+    (ch) => {
+      const bad = `/data/arch${ch}x/org_id=${ORG_A}/source=audit-trail/year=2026/month=08/p.ndjson`;
+      const run = (): string[] =>
+        compileDuckdbViews({ files: files({ 'audit-trail': [bad] }, { [ORG_A]: 'P' }), timezone: 'UTC' });
+      expect(run).toThrow(bad);
+      expect(run).toThrow('* ? [ ] { }');
+    },
+  );
+
+  it('rejects a glob character in any source, even one no flattened view reads', () => {
+    const bad = `/data/a[1]/org_id=${ORG_A}/source=login-history/year=2026/month=08/p.ndjson`;
+    expect(() =>
+      compileDuckdbViews({ files: files({ 'audit-trail': [AUDIT], 'login-history': [bad] }), timezone: 'UTC' }),
+    ).toThrow(bad);
+  });
+
   it('does not emit the timezone into SQL: *_local is a TIMESTAMPTZ the session zone renders', () => {
     const sqls = compileDuckdbViews({ files: full, timezone: 'Pacific/Auckland' });
     for (const s of sqls) expect(s).not.toContain('Pacific/Auckland');

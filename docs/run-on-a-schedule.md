@@ -152,3 +152,7 @@ signing (`gpg.format`, `user.signingkey`) in the archive repository yourself.
 
 The templates pin the plugin version (`SF_EVIDENCE_VERSION`). Upgrade deliberately: read
 the changelog, bump the pin, and run the job once by hand.
+
+The templates install only `@cclabsnz/sf-evidence`, by design: a job that collects has no
+use for `sf evidence query`, and leaving the query plugin out means it never downloads
+DuckDB. Install the query plugin where you read the archive ([`query.md`](query.md)).

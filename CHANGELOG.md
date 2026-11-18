@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- New plugin, `@cclabsnz/sf-evidence-query`, adds `sf evidence query`: one read-only SQL
+  `SELECT` over the archive, run in DuckDB inside the command. Install it next to the main
+  plugin with `sf plugins install @cclabsnz/sf-evidence @cclabsnz/sf-evidence-query`, and
+  allow-list both. The main plugin still doesn't depend on DuckDB, so the scheduling
+  templates are unchanged and install only `@cclabsnz/sf-evidence`.
+- Three views: `setup_changes` (with Login-As resolved into `performed_by` and
+  `recorded_as`), `limit_samples` and `records`. `--view` prints one, with `--from` and
+  `--to`. Output as `table`, `json`, `csv` or `ndjson`. `*_local` columns use `--timezone`,
+  default `Pacific/Auckland`. `docs/query-views.md` lists every column, and
+  `docs/query.md` works through five questions.
+- `query` reads only the record files the hash chain covers. Orphan files are left out and
+  counted in a warning. DuckDB runs with extensions, spilling and file access outside those
+  files turned off, and its configuration locked. `explain` and `docs/security-statement.md`
+  state this and name the tests.
+- `sf evidence doctor` replaces the "DuckDB on PATH" check with a `Query engine` row. The
+  query plugin fills it in when installed; otherwise it says `not installed`, which is not
+  a fault.
+- Engine and library users: the `Sink` interface has two new required methods,
+  `queryRoot()` and `listOrgs()`. A custom sink must implement them. `resolveSink`,
+  `DEFAULT_ARCHIVE`, `VIEWS` and `resolveQueryFiles` are now exported from the engine.
+- Known gaps: there's no action category column yet, `performed_by_id` is NULL for
+  Login-As changes, nested sub-limits aren't in `limit_samples`, and an archive path
+  containing `* ? [ ] { }` can't be queried.
+- All three packages release at 0.2.0. Parquet is no longer planned for this release.
+
 ## 0.1.0 (2026-11-17)
 
 First public release.

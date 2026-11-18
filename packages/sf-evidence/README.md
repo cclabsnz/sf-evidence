@@ -30,7 +30,8 @@ sf evidence verify --org-id <your-org-id>
 `sf plugins install` asks you to confirm installing an unsigned plugin: sf-evidence is not
 signed with Salesforce's plugin-signing scheme. To install non-interactively, as a scheduled
 job must, allow-list it by name in `~/.config/sf/unsignedPluginAllowList.json`:
-`["@cclabsnz/sf-evidence"]`.
+`["@cclabsnz/sf-evidence"]`. If you also install the query plugin, list both:
+`["@cclabsnz/sf-evidence","@cclabsnz/sf-evidence-query"]`.
 
 `collect` writes NDJSON records plus a hash-chained manifest under
 `./sf-evidence-archive/` by default. `verify` walks the chain and reports whether it is
@@ -59,6 +60,7 @@ when someone has to act.
 | `verify` | Walks the hash chain and says what that does and does not prove. |
 | `explain` | Prints every query, file write and network destination, before you run anything. |
 | `doctor` | Checks this machine and archive are ready. Contacts an org only if you pass `--target-org`. |
+| `query` | SQL over the archive. In the separate [`@cclabsnz/sf-evidence-query`](https://www.npmjs.com/package/@cclabsnz/sf-evidence-query) plugin; see below. |
 
 ### `collect`
 
@@ -144,13 +146,32 @@ sf evidence doctor --archive ./sf-evidence-archive --target-org my-org
 ```
 
 Checks the Node version, the plugin and engine versions, whether the archive location is
-writable, whether DuckDB is on the PATH, and (with `--org-id`) the chain head. It writes nothing. Without `--target-org` it contacts no org and
+writable, the query engine, and (with `--org-id`) the chain head. The `Query engine` row
+comes from the query plugin when it's installed: it loads DuckDB in its sandbox and reports
+the version, or a warning with the load error. Without the query plugin the row says
+`not installed`, which is not a fault. It writes nothing. Without `--target-org` it contacts no org and
 no network. With it, the one thing it reads from the org is the org's clock, to compare with
 this machine's: a single `GET /services/data/`, whose `Date` header is read. `explain` lists it.
 Skew over five minutes is a warning, not advisory: `collect` makes the same read on every run
 and ends its windows at the earlier of the two clocks, but when it cannot read the org's it
 falls back to this machine's, and a clock ahead of the org leaves events uncollected. Checks that do not apply to this release are listed as such rather than as
 `ok`. Exit 0 all ok, 4 any warning, 1 any failure.
+
+### `query` (separate plugin)
+
+```bash
+sf plugins install @cclabsnz/sf-evidence-query
+sf evidence query --org-id <your-org-id> --view setup_changes --from 2026-08-01 --to 2026-09-01
+sf evidence query --org-id <your-org-id> --sql "SELECT action, count(*) AS n FROM setup_changes GROUP BY ALL ORDER BY n DESC"
+```
+
+`query` runs one read-only `SELECT` over three views, `setup_changes`, `limit_samples` and
+`records`, in DuckDB inside the command. It is its own plugin so that installing
+`sf-evidence` for a scheduled job never downloads DuckDB. It contacts no org and no
+network, writes nothing, and reads only the record files the hash chain covers. Its results
+are not verified: run `verify` as well when the answer is going to an auditor.
+[Query the archive with SQL](https://github.com/cclabsnz/sf-evidence/blob/main/docs/query.md) has install notes and five worked
+questions; [`query-views.md`](https://github.com/cclabsnz/sf-evidence/blob/main/docs/query-views.md) lists every column.
 
 ### `_state/` is a disposable cache
 
@@ -378,7 +399,17 @@ scheduled job, uses the engine directly: it also exports `runCollect` and the co
 
 ## Release notes for library users
 
-These API changes are not backward compatible:
+In 0.2.0, the `Sink` interface has two new required methods, so a custom sink no longer
+compiles until it implements them:
+
+- `queryRoot(): string | null`: the absolute archive root for a sink on local disk, or null
+  for one that can't be queried in place.
+- `listOrgs(): Promise<string[]>`: the org ids with a partition in the sink, sorted.
+
+`LocalSink` and `GitSink` implement both. The engine also exports `resolveSink`,
+`DEFAULT_ARCHIVE`, the query view definitions (`VIEWS`) and `resolveQueryFiles`.
+
+In 0.1.0, these API changes were not backward compatible:
 
 - `VerifyReport.notes` is a new required field.
 - `CollectResult.metadata` is a new required field.
@@ -394,9 +425,14 @@ This release is intentionally narrow. Stated plainly, so it isn't discovered the
   specified but not implemented, and so is the `object-lock` anchor mode that depends on
   `s3`/`azure`.
 - **NDJSON only.** No Parquet.
-- **No `query`, `check`, `score`, or `report` commands.** There is no ad-hoc SQL over the
-  archive, no rule-pack evaluation, no scoring, and no auditor-facing report generation in
-  this release: only `collect`, `status`, `verify`, `explain` and `doctor`.
+- **`query` is a separate plugin, and its results are unverified.** It reads only
+  chain-covered record files, but it does not check the chain: that is `verify`'s job. The
+  views have no action category yet, so filter on Salesforce's own `Action` codes.
+  `performed_by_id` is NULL for Login-As changes, and nested sub-limits are not in
+  `limit_samples`. An archive path containing `* ? [ ] { }` can't be queried; move or
+  link the archive.
+- **No `check`, `score`, or `report` commands.** There is no rule-pack evaluation, no
+  scoring, and no auditor-facing report generation in this release.
 - **Commit signing is opt-in and yours to configure.** `collect --sink git --sign` runs
   `git commit -S` with your key; we never generate, hold or manage one. Without it, and
   without a remote, `--anchor git` proves less than the chain does not; see the anchor table

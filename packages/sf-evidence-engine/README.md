@@ -19,8 +19,14 @@ Archives written through the engine are byte-identical to archives written by th
 `sf evidence verify` checks both the same way. Component boundaries and the archive format
 are specified in the sf-evidence specification (§3.1 and §5).
 
+It also holds the query views as data (`VIEWS`), their compilation to DuckDB SQL, and the
+list of chain-covered record files a query may read. It has no DuckDB dependency itself:
+[`@cclabsnz/sf-evidence-query`](https://www.npmjs.com/package/@cclabsnz/sf-evidence-query)
+runs the SQL.
+
 `@cclabsnz/sf-evidence-engine/testing` exports the specification's test vectors, which were
-computed independently of this implementation.
+computed independently of this implementation. `@cclabsnz/sf-evidence-engine/testing/query`
+writes the small fixture archive the query tests use.
 
 ## License
 

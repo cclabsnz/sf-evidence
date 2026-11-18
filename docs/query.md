@@ -92,7 +92,8 @@ chain for the org you asked for (`No archive for org … Check --org-id, or run 
 status.`), or no orgs at all under `--all-orgs`, or DuckDB couldn't load, the SQL was refused,
 or the SQL failed. Exit 2 is a usage error, such as two of `--sql`, `--file` and `--view`
 together, or an `--org-id` that isn't an 18-character org id. With `--all-orgs`, an org
-directory with no manifests is skipped with a warning rather than failing the command.
+directory with no manifests is skipped with a warning; if no org has a chain, the command
+exits 1.
 
 `query` only reads the archive, so it works on a read-only archive directory.
 

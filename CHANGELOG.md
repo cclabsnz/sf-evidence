@@ -14,15 +14,18 @@
   `now()` is exact. `docs/query-views.md` lists every column, and
   `docs/query.md` works through five questions.
 - `query` reads only the record files the hash chain covers. Orphan files are left out and
-  counted in a warning. DuckDB runs with extensions, spilling and file access outside those
+  counted in a warning, and so are manifest paths outside the record layout. It only reads,
+  so it works on a read-only archive. An org with no chain is exit 1, not zero rows, and an
+  `--org-id` that isn't 18 characters is a usage error (exit 2). DuckDB runs with extensions, spilling and file access outside those
   files turned off, and its configuration locked. `explain` and `docs/security-statement.md`
   state this and name the tests.
 - `sf evidence doctor` replaces the "DuckDB on PATH" check with a `Query engine` row. The
   query plugin fills it in when installed; otherwise it says `not installed`, which is not
   a fault.
-- Engine and library users: the `Sink` interface has two new required methods,
-  `queryRoot()` and `listOrgs()`. A custom sink must implement them. `resolveSink`,
-  `DEFAULT_ARCHIVE`, `VIEWS` and `resolveQueryFiles` are now exported from the engine.
+- Engine and library users: the `Sink` interface has three new required methods,
+  `queryRoot()`, `listOrgs()` and `checkReadable()`. A custom sink must implement them.
+  `resolveSink`, `DEFAULT_ARCHIVE`, `VIEWS`, `resolveQueryFiles` and `isOrgId` are now
+  exported from the engine.
 - Known gaps: there's no action category column yet, `performed_by_id` is NULL for
   Login-As changes, nested sub-limits aren't in `limit_samples`, and an archive path
   containing `* ? [ ] { }` can't be queried.

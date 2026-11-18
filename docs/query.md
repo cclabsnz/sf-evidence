@@ -78,7 +78,7 @@ by its time column, and only `--view` takes `--from` and `--to`.
 
 | Flag | Meaning |
 |---|---|
-| `--org-id` / `--all-orgs` | One org's partition, or every org in the archive. One is required. |
+| `--org-id` / `--all-orgs` | One org's partition, or every org in the archive. One is required. `--org-id` takes the 18-character id; the 15-character form is a usage error. |
 | `--archive` | Archive root. Defaults to `./sf-evidence-archive`. |
 | `--sink` | `local` (default) or `git`. |
 | `--from`, `--to` | With `--view` only. Rows with time `>= from` and `< to`. Takes `2026-08-01` (UTC midnight) or an ISO timestamp with `Z` or an offset, such as `2026-08-21T12:00+12:00`. |

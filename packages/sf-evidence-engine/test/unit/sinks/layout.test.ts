@@ -6,6 +6,7 @@ import {
   headPath,
   statePath,
   parseOrgDir,
+  isOrgId,
   absoluteRecordPath,
 } from '../../../src/sinks/layout.js';
 
@@ -81,6 +82,13 @@ describe('layout', () => {
     expect(() => manifestPath(ORG, 0)).toThrow(/sequence/i);
     expect(() => manifestPath(ORG, -1)).toThrow(/sequence/i);
     expect(() => manifestPath(ORG, 1.5)).toThrow(/sequence/i);
+  });
+
+  it('isOrgId accepts exactly 18 alphanumerics', () => {
+    expect(isOrgId(ORG)).toBe(true);
+    expect(isOrgId(ORG.slice(0, 15))).toBe(false);
+    expect(isOrgId('../x')).toBe(false);
+    expect(isOrgId(`${ORG}/`)).toBe(false);
   });
 
   it('parseOrgDir extracts an 18-char org id and rejects everything else', () => {

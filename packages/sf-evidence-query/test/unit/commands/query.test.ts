@@ -303,6 +303,16 @@ describe('sf evidence query', () => {
     it('a negative --limit', async () => {
       expect((await query([...orgA, '--sql', 'SELECT 1', '--limit', '-1'])).exit).toBe(EXIT.USAGE);
     });
+
+    it('a 15-character --org-id', async () => {
+      const { exit, error } = await query(['--org-id', '00D5j000000AbCd', '--sql', 'SELECT 1']);
+      expect(exit).toBe(EXIT.USAGE);
+      expect(error!.message).toMatch(/--org-id.*18/);
+    });
+
+    it('an --org-id that is a path', async () => {
+      expect((await query(['--org-id', '../x', '--sql', 'SELECT 1'])).exit).toBe(EXIT.USAGE);
+    });
   });
 
   it('engine load failure exits 1', async () => {

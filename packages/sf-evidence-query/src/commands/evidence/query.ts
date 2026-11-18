@@ -5,6 +5,7 @@ import {
   DEFAULT_ARCHIVE,
   EXIT,
   VIEWS,
+  isOrgId,
   resolveQueryFiles,
   resolveSink,
   setExitCode,
@@ -164,13 +165,18 @@ refused, or the SQL failed · 2 usage error.`;
     } catch {
       throw usage(`--timezone '${flags.timezone}' is not an IANA time zone, e.g. Pacific/Auckland or UTC.`);
     }
+    // A usage error (exit 2), not a failure: the value is wrong before any archive is consulted.
+    const orgId = flags['org-id'];
+    if (orgId !== undefined && !isOrgId(orgId)) {
+      throw usage(`--org-id must be an 18-character alphanumeric org id, got '${orgId}'.`);
+    }
     const sql = await this.statement(flags);
 
     let session: QuerySession | undefined;
     try {
       const sink = resolveSink(flags.sink, flags.archive);
       await sink.init();
-      const orgIds = flags['all-orgs'] ? await sink.listOrgs() : [flags['org-id']!];
+      const orgIds = flags['all-orgs'] ? await sink.listOrgs() : [orgId!];
       const files = await resolveQueryFiles(sink, orgIds);
 
       const warnings: string[] = [];

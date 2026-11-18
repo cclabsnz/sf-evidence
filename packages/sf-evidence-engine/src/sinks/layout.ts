@@ -13,8 +13,17 @@ export const STATE_DIR = '_state';
  */
 const ORG_ID_RE = /^[a-zA-Z0-9]{18}$/;
 
+/**
+ * Whether `s` is an org id this archive accepts as a partition name. Exported so a command can
+ * refuse a malformed `--org-id` as a usage error before it touches the archive, by the same
+ * rule `orgPrefix` would later throw on.
+ */
+export function isOrgId(s: string): boolean {
+  return ORG_ID_RE.test(s);
+}
+
 export function orgPrefix(orgId: string): string {
-  if (!ORG_ID_RE.test(orgId)) {
+  if (!isOrgId(orgId)) {
     throw new Error(`Invalid org id: ${orgId} (expected 18 alphanumeric characters).`);
   }
   return `org_id=${orgId}`;

@@ -27,7 +27,7 @@ const COLLECTION_PATH = [
 ];
 
 /** Read-only record-file resolution, view definitions and the DuckDB view compiler behind `query`. */
-const QUERY = ['VIEWS', 'compileDuckdbViews', 'resolveQueryFiles'];
+const QUERY = ['VIEWS', 'compileDuckdbViews', 'isOrgId', 'resolveQueryFiles'];
 
 /** `--archive` / `--sink` resolution shared by every plugin that takes those flags. */
 const SINK_RESOLUTION = ['DEFAULT_ARCHIVE', 'resolveSink', 'resolveSinks'];

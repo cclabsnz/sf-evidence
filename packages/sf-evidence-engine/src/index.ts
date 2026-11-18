@@ -14,6 +14,8 @@
 // (SPEC.md §3.1, §5.1).
 export { ArchiveReader, type SourceSummary } from './archive/reader.js';
 export { resolveQueryFiles, type QueryFiles } from './archive/queryFiles.js';
+// The org id rule, so `query` can refuse a malformed --org-id as a usage error up front.
+export { isOrgId } from './sinks/layout.js';
 // The query views as data, and their compilation to DuckDB (design §5.5).
 export {
   VIEWS,

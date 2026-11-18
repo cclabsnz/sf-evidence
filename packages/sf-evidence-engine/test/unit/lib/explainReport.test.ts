@@ -170,7 +170,7 @@ describe('buildExplanation', () => {
     expect(m).toContain('enable_external_access');
     expect(m).toContain('write_log');
     expect(m).toContain('setseed');
-    expect(m).toContain('not a source-scan guarantee'.replace('not a', 'neither is a'));
+    expect(m).toContain('neither is a source-scan guarantee');
     expect(m).toContain('packages/sf-evidence-query/test/unit/invariants/invariants.test.ts');
     expect(m).not.toMatch(/engine's own enforcement, exercised/);
     // The unreachable-by-lock query is never offered as evidence.

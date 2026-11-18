@@ -43,6 +43,8 @@ lists every column.
 - DuckDB runs with extension install and autoload off, spilling to disk off, file access
   limited to those record files, and its configuration locked before your SQL runs.
   `sf evidence explain` states this and names the tests behind it.
+- `performed_by_id` is NULL for Login-As changes, and nested sub-limits (such as
+  `PermissionSets.CreateCustom`) aren't in `limit_samples`; read them from `records.payload`.
 - Its results are **not verified**. Run `sf evidence verify` as well when the answer is
   going to an auditor.
 - An archive path containing `* ? [ ] { }` is refused, because DuckDB would read it as a

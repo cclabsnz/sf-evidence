@@ -13,7 +13,13 @@ import { openQuerySession, type QuerySession } from '../duckdb/session.js';
 const NAME = 'Query engine';
 
 /** `allowed_paths=[]` denies all file access, so a session over no files is all the check needs. */
-const NO_FILES: QueryFiles = { bySource: {} as QueryFiles['bySource'], orphanCount: 0, orgLabels: {} };
+const NO_FILES: QueryFiles = {
+  bySource: {} as QueryFiles['bySource'],
+  orphanCount: 0,
+  orgLabels: {},
+  missingOrgs: [],
+  rejectedPaths: 0,
+};
 
 export async function queryEngineCheck(load?: Parameters<typeof openQuerySession>[0]['load']): Promise<Check[]> {
   let session: QuerySession | undefined;

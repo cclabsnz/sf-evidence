@@ -175,7 +175,7 @@ describe('DuckDB sandbox session', () => {
     });
 
     it('denies every file when the session has no files (empty allow-list means none, not all)', async () => {
-      const s = await open({ bySource: {} as QueryFiles['bySource'], orphanCount: 0, orgLabels: {} });
+      const s = await open({ bySource: {} as QueryFiles['bySource'], orphanCount: 0, orgLabels: {}, missingOrgs: [], rejectedPaths: 0 });
       await expect(s.run("SELECT * FROM read_text('/etc/passwd')")).rejects.toThrow(FILE_ACCESS_DENIED);
       await expect(
         s.run(`SELECT * FROM read_ndjson('${files.bySource['audit-trail']![0]!}')`),

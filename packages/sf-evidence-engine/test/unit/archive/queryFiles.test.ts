@@ -1,14 +1,15 @@
-import { mkdtemp, rm, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { LocalSink } from '../../../src/sinks/local.js';
 import { resolveQueryFiles } from '../../../src/archive/queryFiles.js';
 import { orgJsonPath } from '../../../src/archive/metadata.js';
-import { absoluteRecordPath } from '../../../src/sinks/layout.js';
+import { absoluteRecordPath, manifestPath } from '../../../src/sinks/layout.js';
 import { buildBatch } from '../../../src/chain/manifestBuilder.js';
 import { GENESIS_PREV } from '../../../src/types/manifest.js';
 import { RECORD_0, RECORD_1, ORG_ID } from '../../../src/testing/specVectors.js';
 import type { NormalisedRecord } from '../../../src/types/record.js';
+import type { Manifest } from '../../../src/types/manifest.js';
 
 const records = [RECORD_0, RECORD_1] as unknown as NormalisedRecord[];
 const WINDOW = { from: '2026-02-16T00:00:00.000Z', to: '2026-08-15T09:00:00.000Z' };
@@ -96,6 +97,56 @@ describe('resolveQueryFiles', () => {
     expect(res.bySource).toEqual({});
     expect(res.orphanCount).toBe(0);
     expect(res.orgLabels).toEqual({ [ORG_ID]: null });
+    expect(res.missingOrgs).toEqual([ORG_ID]);
+  });
+
+  it('missingOrgs names only the requested orgs that have no manifests', async () => {
+    await seed(records, '2026-08-15T09:00:12.482Z');
+    const other = '00D000000000002AAA';
+    const res = await resolveQueryFiles(sink, [ORG_ID, other]);
+    expect(res.missingOrgs).toEqual([other]);
+    expect(res.rejectedPaths).toBe(0);
+  });
+
+  describe('a tampered manifest cannot widen the file set', () => {
+    /** Rewrite manifest 1's record file paths in place, as someone with write access could. */
+    async function tamper(paths: (original: string, i: number) => string): Promise<void> {
+      const file = join(root, ...manifestPath(ORG_ID, 1).split('/'));
+      const m = JSON.parse(await readFile(file, 'utf8')) as Manifest;
+      let i = 0;
+      for (const src of m.sources) for (const f of src.files) f.path = paths(f.path, i++);
+      await writeFile(file, JSON.stringify(m));
+    }
+
+    const inside = (p: string): boolean => p.startsWith(root + sep);
+
+    it.each([
+      ['a path that climbs out with ..', (p: string) => `${p.split('/').slice(0, 4).join('/')}/../../../../../../etc/passwd.ndjson`],
+      ['an absolute path', () => '/etc/passwd.ndjson'],
+      ['another org\'s partition', (p: string) => p.replace(`org_id=${ORG_ID}`, 'org_id=00D000000000002AAA')],
+      ['a path outside the record layout', (p: string) => `org_id=${ORG_ID}/_state/${p.split('/').at(-1)}`],
+    ])('excludes and counts %s', async (_name, rewrite) => {
+      // Two manifests; only manifest 1's first file is tampered with, the rest must still resolve.
+      const b1 = await seed([RECORD_0 as unknown as NormalisedRecord], '2026-08-15T09:00:12.482Z');
+      const b2 = await seed([RECORD_1 as unknown as NormalisedRecord], '2026-08-16T09:00:12.482Z');
+      const total = [b1, b2].flatMap((b) => b.manifest.sources.flatMap((x) => x.files)).length;
+      expect(total).toBeGreaterThanOrEqual(2);
+      await tamper((p, i) => (i === 0 ? rewrite(p) : p));
+      const res = await resolveQueryFiles(sink, [ORG_ID]);
+      expect(res.rejectedPaths).toBe(1);
+      expect(res.bySource['audit-trail']).toHaveLength(total - 1);
+      expect(res.bySource['audit-trail']!.every(inside)).toBe(true);
+    });
+
+    it('drops a source whose every file is rejected', async () => {
+      const b = await seed(records, '2026-08-15T09:00:12.482Z');
+      await tamper(() => '../outside.ndjson');
+      const res = await resolveQueryFiles(sink, [ORG_ID]);
+      expect(res.rejectedPaths).toBe(b.manifest.sources.flatMap((x) => x.files).length);
+      expect(res.bySource).toEqual({});
+      // The org has a chain, so it is not "missing"; its files were refused.
+      expect(res.missingOrgs).toEqual([]);
+    });
   });
 
   it('orgLabels reads org.json name', async () => {

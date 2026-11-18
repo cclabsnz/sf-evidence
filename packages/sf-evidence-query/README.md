@@ -50,8 +50,9 @@ lists every column.
 - An archive path containing `* ? [ ] { }` is refused, because DuckDB would read it as a
   file pattern. Move the archive, or link to it from a path without those characters.
 
-Exit codes: 0 success, including zero rows; 1 DuckDB could not load, or the SQL was
-refused or failed; 2 usage error.
+Exit codes: 0 success, including zero rows; 1 no archive for the requested org (or no orgs
+under `--all-orgs`), DuckDB could not load, or the SQL was refused or failed; 2 usage error,
+including an `--org-id` that is not 18 characters.
 
 ## License
 

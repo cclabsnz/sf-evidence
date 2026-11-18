@@ -7,7 +7,7 @@ import { openQuerySession, type QuerySession } from '../../../src/duckdb/session
  * whatever the offset was at that instant, so these pin the session's own rendering.
  */
 
-const NO_FILES: QueryFiles = { bySource: {} as QueryFiles['bySource'], orphanCount: 0, orgLabels: {} };
+const NO_FILES: QueryFiles = { bySource: {} as QueryFiles['bySource'], orphanCount: 0, orgLabels: {}, missingOrgs: [], rejectedPaths: 0 };
 
 let session: QuerySession | undefined;
 

@@ -9,7 +9,7 @@ const AUDIT = `/arch/org_id=${ORG_A}/source=audit-trail/year=2026/month=08/part-
 const LIMITS = `/arch/org_id=${ORG_A}/source=limits/year=2026/month=11/part-2.ndjson`;
 
 function files(bySource: Partial<Record<SourceId, string[]>>, orgLabels: Record<string, string | null> = {}): QueryFiles {
-  return { bySource: bySource as Record<SourceId, string[]>, orphanCount: 0, orgLabels };
+  return { bySource: bySource as Record<SourceId, string[]>, orphanCount: 0, orgLabels, missingOrgs: [], rejectedPaths: 0 };
 }
 
 function stmt(sqls: string[], name: string): string {

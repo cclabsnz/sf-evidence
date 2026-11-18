@@ -87,9 +87,14 @@ by its time column, and only `--view` takes `--from` and `--to`.
 | `--timezone` | IANA zone for the `*_local` columns. Defaults to `Pacific/Auckland`. |
 | `--json` | The full result envelope: columns with types, rows, row count, warnings. |
 
-Exit 0 means the query ran, even if it returned no rows. Exit 1 means DuckDB couldn't
-load, the SQL was refused, or the SQL failed. Exit 2 is a usage error, such as two of
-`--sql`, `--file` and `--view` together.
+Exit 0 means the query ran, even if it returned no rows. Exit 1 means the archive has no
+chain for the org you asked for (`No archive for org … Check --org-id, or run sf evidence
+status.`), or no orgs at all under `--all-orgs`, or DuckDB couldn't load, the SQL was refused,
+or the SQL failed. Exit 2 is a usage error, such as two of `--sql`, `--file` and `--view`
+together, or an `--org-id` that isn't an 18-character org id. With `--all-orgs`, an org
+directory with no manifests is skipped with a warning rather than failing the command.
+
+`query` only reads the archive, so it works on a read-only archive directory.
 
 ### Times
 
@@ -364,6 +369,15 @@ explains what `verify` proves and what it doesn't.
 
   ```
   Warning: 1 record file(s) in the archive are not covered by the hash chain and were excluded. Run sf evidence verify.
+  ```
+
+- **a manifest entry outside the record layout.** Only paths of the form
+  `org_id=<that org>/source=<source>/year=YYYY/month=MM/<file>.ndjson` are read. A manifest
+  that lists anything else (`..`, an absolute path, another org's partition) has been edited;
+  those paths are left out and the command warns:
+
+  ```
+  Warning: 1 manifest file path(s) are outside the archive layout and were excluded. Run sf evidence verify.
   ```
 
 - **manifests, `head.json`, `archive.json` and `org.json`.** The views use `org.json` for

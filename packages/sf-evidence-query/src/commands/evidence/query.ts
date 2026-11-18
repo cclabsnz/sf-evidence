@@ -111,8 +111,9 @@ Contacts no Salesforce org and no network, and writes nothing.
 --from and --to (with --view only) take YYYY-MM-DD (UTC midnight) or an ISO timestamp with Z
 or an offset, and bound the view's time column as [from, to), in UTC.
 
-Exit codes: 0 success, including zero rows · 1 the query engine could not load, the SQL was
-refused, or the SQL failed · 2 usage error.`;
+Exit codes: 0 success, including zero rows · 1 the archive holds no chain for the requested
+org (or no orgs at all), the query engine could not load, the SQL was refused, or the SQL
+failed · 2 usage error, including an --org-id that is not an 18-character org id.`;
 
   public static readonly examples = [
     '<%= config.bin %> <%= command.id %> --org-id 00D5j000000AbCdEAK --view setup_changes --from 2026-08-01 --to 2026-09-01',
@@ -177,14 +178,34 @@ refused, or the SQL failed · 2 usage error.`;
       const sink = resolveSink(flags.sink, flags.archive);
       // Not init(): that asks for write access, and query only reads, so a read-only archive must work.
       await sink.checkReadable();
+      // The resolved root, so the message names the directory actually consulted, not a relative flag.
+      const where = sink.queryRoot() ?? flags.archive;
       const orgIds = flags['all-orgs'] ? await sink.listOrgs() : [orgId!];
+      // Without these, an archive with nothing to read is exit 0 and zero rows, which reads as
+      // "no events" when the truth is "wrong --org-id or wrong --archive".
+      if (orgIds.length === 0) throw failure(`No orgs found in ${where}.`, 'NoArchive');
       const files = await resolveQueryFiles(sink, orgIds);
+      if (files.missingOrgs.length === orgIds.length) {
+        throw failure(
+          `No archive for org ${files.missingOrgs.join(', ')} in ${where}. Check --org-id, or run sf evidence status.`,
+          'NoArchive',
+        );
+      }
 
       const warnings: string[] = [];
-      if (files.orphanCount > 0) {
-        const w = `${files.orphanCount} record file(s) in the archive are not covered by the hash chain and were excluded. Run sf evidence verify.`;
+      const warn = (w: string): void => {
         warnings.push(w);
         this.warn(w);
+      };
+      // Only --all-orgs reaches this with a missing org: an org_id= partition with no chain.
+      for (const id of files.missingOrgs) {
+        warn(`No archive for org ${id} in ${where}; it has no manifests, so it adds no rows. Run sf evidence status.`);
+      }
+      if (files.rejectedPaths > 0) {
+        warn(`${files.rejectedPaths} manifest file path(s) are outside the archive layout and were excluded. Run sf evidence verify.`);
+      }
+      if (files.orphanCount > 0) {
+        warn(`${files.orphanCount} record file(s) in the archive are not covered by the hash chain and were excluded. Run sf evidence verify.`);
       }
 
       session = await openQuerySession({ files, timezone: flags.timezone, load: this.engineLoader() });

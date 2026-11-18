@@ -7,6 +7,7 @@ import {
   statePath,
   parseOrgDir,
   isOrgId,
+  isRecordPath,
   absoluteRecordPath,
 } from '../../../src/sinks/layout.js';
 
@@ -89,6 +90,34 @@ describe('layout', () => {
     expect(isOrgId(ORG.slice(0, 15))).toBe(false);
     expect(isOrgId('../x')).toBe(false);
     expect(isOrgId(`${ORG}/`)).toBe(false);
+  });
+
+  it('isRecordPath accepts what recordFilePath writes, for that org and source only', () => {
+    const p = recordFilePath({
+      orgId: ORG,
+      source: 'audit-trail',
+      occurredAt: '2026-08-14T02:11:09.000Z',
+      collectedAt: '2026-08-15T09:00:12.482Z',
+      runId: '01K3QF8H2N0000000000000000',
+    });
+    expect(isRecordPath(p, ORG, 'audit-trail')).toBe(true);
+    expect(isRecordPath(p, '00D000000000002AAA', 'audit-trail')).toBe(false);
+    expect(isRecordPath(p, ORG, 'limits')).toBe(false);
+    const dir = `org_id=${ORG}/source=audit-trail/year=2026/month=08`;
+    for (const bad of [
+      `${dir}/../../../../x.ndjson`,
+      `${dir}/..`,
+      `${dir}/.hidden.ndjson`,
+      `${dir}/part-x.json`,
+      `${dir}/a\\b.ndjson`,
+      `${dir}/sub/part-x.ndjson`,
+      `/${dir}/part-x.ndjson`,
+      `org_id=${ORG}/source=audit-trail/year=26/month=08/part-x.ndjson`,
+      `org_id=${ORG}/source=audit-trail/year=2026/month=13/part-x.ndjson`,
+      `org_id=${ORG}/_state/part-x.ndjson`,
+    ]) {
+      expect([bad, isRecordPath(bad, ORG, 'audit-trail')]).toEqual([bad, false]);
+    }
   });
 
   it('parseOrgDir extracts an 18-char org id and rejects everything else', () => {

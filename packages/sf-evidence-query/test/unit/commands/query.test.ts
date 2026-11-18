@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Config } from '@oclif/core';
@@ -365,6 +365,66 @@ describe('sf evidence query', () => {
     } finally {
       await chmod(ro, 0o755);
       await rm(ro, { recursive: true, force: true });
+    }
+  });
+
+  describe('an org the archive does not hold', () => {
+    const ABSENT = '00D5j000000ZZZZZZZ';
+
+    it('a well-formed --org-id with no archive exits 1 and says so', async () => {
+      const { exit, error, result } = await query(['--org-id', ABSENT, '--view', 'setup_changes']);
+      expect(result).toBeUndefined();
+      expect(exit).toBe(EXIT.ERROR);
+      expect(error!.message).toBe(`No archive for org ${ABSENT} in ${root}. Check --org-id, or run sf evidence status.`);
+    });
+
+    it('--all-orgs over a root with no orgs exits 1', async () => {
+      const empty = await scratchArchive(false);
+      try {
+        const { exit, error } = await query(['--all-orgs', '--sql', 'SELECT 1'], undefined, empty);
+        expect(exit).toBe(EXIT.ERROR);
+        expect(error!.message).toBe(`No orgs found in ${empty}.`);
+      } finally {
+        await rm(empty, { recursive: true, force: true });
+      }
+    });
+
+    it('--all-orgs warns for a partition with no manifests and queries the rest', async () => {
+      const dir = await scratchArchive(true);
+      await mkdir(join(dir, `org_id=${ABSENT}`));
+      try {
+        const { exit, result } = await query(['--all-orgs', '--view', 'setup_changes', '--format', 'json'], undefined, dir);
+        const w = `No archive for org ${ABSENT} in ${dir}; it has no manifests, so it adds no rows. Run sf evidence status.`;
+        expect(exit).toBe(EXIT.OK);
+        expect(result!.rowCount).toBe(4);
+        expect(result!.warnings).toContain(w);
+        expect(warned).toContain(w);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('excludes manifest file paths outside the archive layout, with a warning', async () => {
+    const dir = await scratchArchive(true);
+    try {
+      // Every record file org A's chain lists now points outside the archive.
+      const chain = join(dir, `org_id=${FIXTURE.orgA}`, '_chain');
+      let rewritten = 0;
+      for (const name of (await readdir(chain)).filter((n) => n.endsWith('.manifest.json'))) {
+        const m = JSON.parse(await readFile(join(chain, name), 'utf8')) as { sources: { files: { path: string }[] }[] };
+        for (const src of m.sources) for (const f of src.files) (f.path = '../../../../etc/passwd.ndjson'), rewritten++;
+        await writeFile(join(chain, name), JSON.stringify(m));
+      }
+      expect(rewritten).toBeGreaterThan(0);
+      const { exit, result } = await query([...orgA, '--view', 'setup_changes', '--format', 'json'], undefined, dir);
+      const w = `${rewritten} manifest file path(s) are outside the archive layout and were excluded. Run sf evidence verify.`;
+      expect(exit).toBe(EXIT.OK);
+      expect(result!.rowCount).toBe(0);
+      expect(result!.warnings).toContain(w);
+      expect(warned).toContain(w);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 

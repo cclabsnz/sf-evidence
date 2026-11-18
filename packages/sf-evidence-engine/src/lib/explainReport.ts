@@ -227,7 +227,7 @@ function describeAssertions(sinks: Sink[]): Assertion[] {
         'the same kind of static egress scan, in ' +
         'packages/sf-evidence-query/test/unit/invariants/invariants.test.ts. Like the GitSink ' +
         'case above, that scan does not see subprocesses: with a git sink, `query` runs only a ' +
-        'local `git rev-parse` through GitSink.init. What backs the claim for DuckDB is the sandbox ' +
+        'local `git rev-parse` through GitSink.checkReadable. What backs the claim for DuckDB is the sandbox ' +
         'the query plugin opens it with, tested in ' +
         'packages/sf-evidence-query/test/unit/duckdb/sandbox.test.ts. DuckDB settings: extension ' +
         'autoinstall and autoload are off, and INSTALL and LOAD are refused; file access is limited ' +

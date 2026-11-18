@@ -47,6 +47,8 @@ class FakeSink implements Sink {
 
   public async init(): Promise<void> {}
 
+  public async checkReadable(): Promise<void> {}
+
   public queryRoot(): string | null {
     return null;
   }

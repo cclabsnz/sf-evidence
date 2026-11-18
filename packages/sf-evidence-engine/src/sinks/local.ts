@@ -79,6 +79,25 @@ export class LocalSink implements Sink {
   }
 
   public async init(): Promise<void> {
+    await this.assertRootDirectory();
+    await access(this.root, constants.W_OK);
+  }
+
+  /**
+   * The root exists and is a directory, and no write access is asked for, so a reader such as
+   * `query` works on an archive mounted or shared read-only. Like `init`, it never creates
+   * anything (C5).
+   */
+  public async checkReadable(): Promise<void> {
+    await this.assertRootDirectory();
+  }
+
+  /**
+   * Shared by `init` and `checkReadable`. Private, not a call from `init` to `checkReadable`,
+   * because a subclass override of `checkReadable` would then run inside `init` too: GitSink's
+   * would add a second `rev-parse` and report "not a git repository" ahead of the W_OK error.
+   */
+  private async assertRootDirectory(): Promise<void> {
     try {
       const s = await stat(this.root);
       if (!s.isDirectory()) {
@@ -94,7 +113,6 @@ export class LocalSink implements Sink {
       }
       throw err;
     }
-    await access(this.root, constants.W_OK);
   }
 
   public async head(orgId: string): Promise<ChainHead | null> {

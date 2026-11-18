@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Config } from '@oclif/core';
@@ -100,8 +100,8 @@ describe('sf evidence query', () => {
     exit: number;
   }
 
-  async function query(argv: string[], setup?: (cmd: EvidenceQuery) => void): Promise<Outcome> {
-    const cmd = capture(new EvidenceQuery([...argv, '--archive', root], config));
+  async function query(argv: string[], setup?: (cmd: EvidenceQuery) => void, archive = root): Promise<Outcome> {
+    const cmd = capture(new EvidenceQuery([...argv, '--archive', archive], config));
     setup?.(cmd);
     let result: QueryCommandResult | undefined;
     let error: Error | undefined;
@@ -344,6 +344,28 @@ describe('sf evidence query', () => {
     expect(logged).toEqual(['{"i":0}', '{"i":1}', '{"i":2}', '{"i":3}', '{"i":4}']);
     expect(result!.rowCount).toBe(5);
     expect(result!.truncated).toBe(true);
+  });
+
+  /** A fresh archive root per test, for cases that change the archive or its permissions. */
+  async function scratchArchive(fixture: boolean): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'sfe-query-scratch-'));
+    if (fixture) await writeQueryFixture(dir);
+    return dir;
+  }
+
+  (process.getuid?.() === 0 ? it.skip : it)('reads a read-only archive root', async () => {
+    // root ignores permission bits, hence the skip.
+    const ro = await scratchArchive(true);
+    await chmod(ro, 0o555);
+    try {
+      const { result, exit, error } = await query([...orgA, '--view', 'setup_changes', '--format', 'json'], undefined, ro);
+      expect(error?.message).toBeUndefined();
+      expect(exit).toBe(EXIT.OK);
+      expect(result!.rowCount).toBe(3);
+    } finally {
+      await chmod(ro, 0o755);
+      await rm(ro, { recursive: true, force: true });
+    }
   });
 
   it('archive is byte-identical after the command', async () => {

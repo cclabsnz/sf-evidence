@@ -58,6 +58,16 @@ export class GitSink extends LocalSink {
 
   public override async init(): Promise<void> {
     await super.init();
+    await this.assertGitRepository();
+  }
+
+  /** LocalSink's readable-root check plus the repository check, with no write access asked for. */
+  public override async checkReadable(): Promise<void> {
+    await super.checkReadable();
+    await this.assertGitRepository();
+  }
+
+  private async assertGitRepository(): Promise<void> {
     try {
       await this.git(['rev-parse', '--git-dir']);
     } catch {

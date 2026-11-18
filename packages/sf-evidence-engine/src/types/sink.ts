@@ -87,6 +87,13 @@ export interface Sink {
    */
   init(): Promise<void>;
 
+  /**
+   * Verify the target exists and can be read, without asking for write access, for commands
+   * that only read (`query`). The same "create it yourself" refusal as `init` when it is
+   * missing, and likewise MUST NOT create it (C5).
+   */
+  checkReadable(): Promise<void>;
+
   head(orgId: string): Promise<ChainHead | null>;
   readManifest(orgId: string, seq: number): Promise<Manifest | null>;
   /** Sequence numbers present in the chain directory, ascending. */

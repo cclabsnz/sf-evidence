@@ -175,7 +175,8 @@ refused, or the SQL failed · 2 usage error.`;
     let session: QuerySession | undefined;
     try {
       const sink = resolveSink(flags.sink, flags.archive);
-      await sink.init();
+      // Not init(): that asks for write access, and query only reads, so a read-only archive must work.
+      await sink.checkReadable();
       const orgIds = flags['all-orgs'] ? await sink.listOrgs() : [orgId!];
       const files = await resolveQueryFiles(sink, orgIds);
 

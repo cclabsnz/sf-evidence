@@ -77,6 +77,9 @@ export {
 // decides whether to evaluate the git anchor with `instanceof GitSink`.
 export { LocalSink } from './sinks/local.js';
 export { GitSink, type GitSinkOptions } from './sinks/git.js';
+// `--archive` / `--sink` resolution lives here, not in the CLI, so every plugin that takes
+// those flags (`collect`, `query`) resolves them identically.
+export { DEFAULT_ARCHIVE, resolveSink, resolveSinks, type SinkResolveOptions } from './sinks/resolve.js';
 
 // Collection path, for hosts that write archives.
 export {

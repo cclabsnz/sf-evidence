@@ -8,7 +8,7 @@ import {
   type Check,
   type DoctorEnv,
 } from '@cclabsnz/sf-evidence-engine';
-import { DEFAULT_ARCHIVE, resolveSink } from '../../lib/flags.js';
+import { DEFAULT_ARCHIVE, resolveSink } from '@cclabsnz/sf-evidence-engine';
 import { gitConfig, readVersions, which } from '../../lib/doctorEnv.js';
 import { readOrgClock } from '../../lib/orgClock.js';
 

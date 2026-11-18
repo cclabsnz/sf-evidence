@@ -1,7 +1,7 @@
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { verifyChain, type VerifyReport } from '@cclabsnz/sf-evidence-engine';
 import { type AnchorMode } from '@cclabsnz/sf-evidence-engine';
-import { DEFAULT_ARCHIVE, resolveSink } from '../../lib/flags.js';
+import { DEFAULT_ARCHIVE, resolveSink } from '@cclabsnz/sf-evidence-engine';
 import { setExitCode } from '@cclabsnz/sf-evidence-engine';
 import {
   ALGORITHM,

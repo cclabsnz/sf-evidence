@@ -11,7 +11,8 @@ import {
 import { buildClients } from '../../lib/wire.js';
 import { readOrgClock } from '../../lib/orgClock.js';
 import { resolveOrgId } from '@cclabsnz/sf-evidence-engine';
-import { DEFAULT_ARCHIVE, resolveSinks, exitCodeFor } from '../../lib/flags.js';
+import { DEFAULT_ARCHIVE, resolveSinks } from '@cclabsnz/sf-evidence-engine';
+import { exitCodeFor } from '../../lib/flags.js';
 import { setExitCode } from '@cclabsnz/sf-evidence-engine';
 import type { SourceId } from '@cclabsnz/sf-evidence-engine';
 

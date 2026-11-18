@@ -29,8 +29,11 @@ const COLLECTION_PATH = [
 /** Read-only record-file resolution behind `query`. */
 const QUERY = ['resolveQueryFiles'];
 
+/** `--archive` / `--sink` resolution shared by every plugin that takes those flags. */
+const SINK_RESOLUTION = ['DEFAULT_ARCHIVE', 'resolveSink', 'resolveSinks'];
+
 describe('engine public API', () => {
   it('exports the CLI surface, the status assessment and the collection path, and nothing else', () => {
-    expect(Object.keys(api).sort()).toEqual([...CLI_SURFACE, ...STATUS_ASSESSMENT, ...COLLECTION_PATH, ...DIAGNOSTICS, ...QUERY].sort());
+    expect(Object.keys(api).sort()).toEqual([...CLI_SURFACE, ...STATUS_ASSESSMENT, ...COLLECTION_PATH, ...DIAGNOSTICS, ...QUERY, ...SINK_RESOLUTION].sort());
   });
 });

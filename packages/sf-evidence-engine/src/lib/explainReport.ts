@@ -218,6 +218,24 @@ function describeAssertions(sinks: Sink[]): Assertion[] {
         'Every sink verifies its target exists and refuses to create it (LocalSink.init, GitSink.init), ' +
         'printing the command for you to run yourself instead.',
     },
+    {
+      claim: 'sf evidence query (separate plugin) contacts no network destination and writes no files.',
+      mechanism:
+        'The static egress scan above does not cover this: `query` runs SQL in in-process DuckDB, ' +
+        'which is native code, and that scan reads TypeScript source for HTTP clients and ' +
+        'hostnames, not what a native engine does. What backs the claim is the sandbox the query ' +
+        'plugin opens DuckDB with, tested in ' +
+        'packages/sf-evidence-query/test/unit/duckdb/sandbox.test.ts: extension autoinstall and ' +
+        'autoload are off, and INSTALL and LOAD are refused; file access is limited to the ' +
+        'chain-covered record files (`allowed_paths` with `enable_external_access=false`), so ' +
+        'other paths, URLs and COPY TO fail; spilling is disabled; configuration is locked before ' +
+        'user SQL runs, so SQL cannot SET any of this back; and only single SELECT statements run, ' +
+        'checked by statement type and by parse tree. Table functions are limited to an ' +
+        'allowlist of read-only ones, and `write_log` and `setseed` are refused. This is the ' +
+        'engine\'s own enforcement, exercised by those tests; it is not a source-scan guarantee. ' +
+        'This assertion is always shown, because `explain` runs in this plugin and does not know ' +
+        'whether the query plugin is installed.',
+    },
   ];
 
   if (sinks.some(isGitSink)) {

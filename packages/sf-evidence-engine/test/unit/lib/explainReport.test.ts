@@ -149,6 +149,26 @@ describe('buildExplanation', () => {
     expect(a.some((x) => /infrastructure/i.test(x.claim))).toBe(true);
   });
 
+  it('explain states the query plugin\'s sandbox and its limit', () => {
+    const claim = explanation().assertions.find((x) => /sf evidence query/i.test(x.claim));
+    expect(claim).toBeDefined();
+    expect(claim!.claim).toBe(
+      'sf evidence query (separate plugin) contacts no network destination and writes no files.',
+    );
+    const m = claim!.mechanism;
+    expect(m).toMatch(/in-process DuckDB/);
+    expect(m).toMatch(/native code/i);
+    expect(m).toMatch(/static egress scan/i);
+    expect(m).toMatch(/autoinstall and autoload/i);
+    expect(m).toMatch(/chain-covered record files/i);
+    expect(m).toMatch(/spilling is disabled/i);
+    expect(m).toMatch(/configuration is locked/i);
+    expect(m).toMatch(/single SELECT/i);
+    expect(m).toContain('packages/sf-evidence-query/test/unit/duckdb/sandbox.test.ts');
+    // The unreachable-by-lock query is never offered as evidence.
+    expect(m).not.toMatch(/returns 0/);
+  });
+
   it('discloses a git sink destination as local-only with no push', () => {
     const e = buildExplanation({
       sources: ['audit-trail'],

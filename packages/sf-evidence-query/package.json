@@ -57,6 +57,7 @@
     "@cclabsnz/sf-evidence-engine": "workspace:^",
     "@duckdb/node-api": "1.5.6-r.2",
     "@oclif/core": "^5",
+    "@salesforce/core": "^9",
     "@salesforce/sf-plugins-core": "^13"
   },
   "devDependencies": {

@@ -19,7 +19,7 @@ type DuckDBListType = import('@duckdb/node-api').DuckDBListType;
 type DuckDBStructType = import('@duckdb/node-api').DuckDBStructType;
 type DuckDBMapType = import('@duckdb/node-api').DuckDBMapType;
 
-/** DuckDB's native binding could not be loaded (missing prebuilt binary, unsupported platform, ...). */
+/** DuckDB's native binding could not be loaded (missing prebuilt binary, unsupported platform, ...). The message is the underlying error's. */
 export class QueryEngineUnavailable extends Error {
   public constructor(message: string) {
     super(message);
@@ -41,7 +41,9 @@ export async function loadDuckdb(
   try {
     return await load();
   } catch (err) {
-    throw new QueryEngineUnavailable(`The DuckDB query engine could not be loaded: ${errorMessage(err)}`);
+    // The bare underlying message: each caller frames it (`query`: "Query engine could not
+    // load: …", the doctor check: "could not load: …"), so it is not said twice.
+    throw new QueryEngineUnavailable(errorMessage(err));
   }
 }
 

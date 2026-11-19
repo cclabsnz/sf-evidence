@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-19)
 
 - New plugin, `@cclabsnz/sf-evidence-query`, adds `sf evidence query`: one read-only SQL
   `SELECT` over the archive, run in DuckDB inside the command. Install it next to the main

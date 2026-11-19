@@ -1,6 +1,6 @@
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { buildExplanation, type Explanation } from '@cclabsnz/sf-evidence-engine';
-import { DEFAULT_ARCHIVE, resolveSink } from '../../lib/flags.js';
+import { DEFAULT_ARCHIVE, resolveSink } from '@cclabsnz/sf-evidence-engine';
 import type { SourceId } from '@cclabsnz/sf-evidence-engine';
 
 const WINDOW_NOTE =

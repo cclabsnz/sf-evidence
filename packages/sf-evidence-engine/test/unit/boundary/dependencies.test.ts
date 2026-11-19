@@ -26,6 +26,17 @@ describe('engine dependency boundary', () => {
     expect(declared.filter((name) => FORBIDDEN_PACKAGE.test(name))).toEqual([]);
   });
 
+  it('declares no @duckdb/ dependency', () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as Record<
+      string,
+      Record<string, string> | undefined
+    >;
+    const declared = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].flatMap(
+      (field) => Object.keys(pkg[field] ?? {}),
+    );
+    expect(declared.filter((name) => name.startsWith('@duckdb/'))).toEqual([]);
+  });
+
   it('imports no CLI or Salesforce-CLI module, not even as a type', () => {
     const offending = collectSourceFiles(join(ROOT, 'src')).flatMap((file) =>
       readFileSync(file, 'utf8')

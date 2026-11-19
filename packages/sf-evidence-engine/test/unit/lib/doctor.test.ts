@@ -47,13 +47,32 @@ describe('doctor', () => {
     expect(find(await runChecks(env({ nodeVersion: '22.0.0' })), 'node').level).toBe('ok');
   });
 
-  it('warns but does not fail when DuckDB is absent', async () => {
-    const checks = await runChecks(env({ which: async (c) => (c === 'duckdb' ? null : '/usr/bin/git') }));
-    const duck = find(checks, 'duckdb');
-    expect(duck.level).toBe('warn');
-    expect(duck.detail).toMatch(/Phase 2/);
-    expect(checks.some((c) => c.level === 'fail')).toBe(false);
-    expect(doctorExitCode(checks)).toBe(EXIT.DEGRADED);
+  it('no extra checks reports query engine not installed, unchecked', async () => {
+    for (const extraChecks of [undefined, async () => []]) {
+      const checks = await runChecks(env({ extraChecks }));
+      const q = find(checks, 'query engine');
+      expect(q).toEqual({
+        name: 'Query engine',
+        level: 'ok',
+        detail: 'not installed (sf plugins install @cclabsnz/sf-evidence-query)',
+        checked: false,
+      });
+      expect(doctorExitCode(checks)).toBe(EXIT.OK);
+    }
+  });
+
+  it('extra checks replace the placeholder', async () => {
+    const extra: Check = { name: 'Query engine', level: 'ok', detail: 'DuckDB v1.5.6 (in-process, sandboxed)', checked: true };
+    const checks = await runChecks(env({ extraChecks: async () => [extra] }));
+    expect(checks.filter((c) => c.name === 'Query engine')).toEqual([extra]);
+    expect(checks.some((c) => /not installed/.test(c.detail))).toBe(false);
+  });
+
+  it('no longer looks for duckdb on PATH', async () => {
+    const which = jest.fn(async () => '/usr/bin/tool');
+    const checks = await runChecks(env({ which }));
+    expect(which).not.toHaveBeenCalledWith('duckdb');
+    expect(checks.some((c) => /on PATH/.test(c.name))).toBe(false);
   });
 
   it('lists not-applicable checks rather than omitting them', async () => {
@@ -173,7 +192,6 @@ describe('doctor', () => {
     const checks = await runChecks(env());
     expect(find(checks, 'node').checked).toBe(true);
     expect(find(checks, 'archive').checked).toBe(true);
-    expect(find(checks, 'duckdb').checked).toBe(true);
   });
 
   it('renders one line per check, skipped rows as skipped, remediation beneath', async () => {

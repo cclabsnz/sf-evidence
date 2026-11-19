@@ -1,6 +1,6 @@
-import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { LocalSink } from '../../../src/sinks/local.js';
 import { buildBatch, manifestHash } from '../../../src/chain/manifestBuilder.js';
 import { GENESIS_PREV } from '../../../src/types/manifest.js';
@@ -59,6 +59,33 @@ describe('LocalSink', () => {
     const missing = join(root, 'does-not-exist');
     await expect(new LocalSink(missing).init()).rejects.toThrow(/does not exist.*mkdir/is);
     await expect(readdir(missing)).rejects.toThrow();
+  });
+
+  describe('checkReadable', () => {
+    /** root ignores permission bits, so a read-only directory proves nothing there. */
+    const asRoot = process.getuid?.() === 0;
+
+    (asRoot ? it.skip : it)('accepts a read-only root that init refuses', async () => {
+      await chmod(root, 0o555);
+      try {
+        await expect(new LocalSink(root).checkReadable()).resolves.toBeUndefined();
+        await expect(new LocalSink(root).init()).rejects.toThrow(/EACCES/);
+      } finally {
+        await chmod(root, 0o755);
+      }
+    });
+
+    it('refuses a missing root without creating it, and says how to create it', async () => {
+      const missing = join(root, 'does-not-exist');
+      await expect(new LocalSink(missing).checkReadable()).rejects.toThrow(/does not exist.*mkdir/is);
+      await expect(readdir(missing)).rejects.toThrow();
+    });
+
+    it('refuses a root that is a file', async () => {
+      const file = join(root, 'plain.txt');
+      await writeFile(file, 'x');
+      await expect(new LocalSink(file).checkReadable()).rejects.toThrow(/not a directory/);
+    });
   });
 
   it('head returns null for an org with no chain yet', async () => {
@@ -255,5 +282,21 @@ describe('LocalSink', () => {
     await sink.putBatch(batch(1, GENESIS_PREV));
     await sink.writeState(ORG_ID, 'coverage.ndjson', '{}');
     await expect(sink.listOrphans(ORG_ID)).resolves.toEqual([]);
+  });
+
+  it('queryRoot returns the absolute root', () => {
+    expect(new LocalSink('./x').queryRoot()).toBe(resolve('./x'));
+  });
+
+  it('listOrgs lists org partitions only', async () => {
+    await mkdir(join(root, 'org_id=00D5j000000AbCdEAK'));
+    await mkdir(join(root, 'org_id=bad'));
+    await mkdir(join(root, '_tmp'));
+    await writeFile(join(root, 'archive.json'), '{}');
+    await expect(new LocalSink(root).listOrgs()).resolves.toEqual(['00D5j000000AbCdEAK']);
+  });
+
+  it('listOrgs on a missing root returns []', async () => {
+    await expect(new LocalSink(join(root, 'nope')).listOrgs()).resolves.toEqual([]);
   });
 });

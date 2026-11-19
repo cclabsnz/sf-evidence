@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { jest } from '@jest/globals';
@@ -56,6 +56,26 @@ describe('GitSink', () => {
     const plain = await mkdtemp(join(tmpdir(), 'sf-evidence-plain-'));
     await expect(new GitSink(plain).init()).rejects.toThrow(/not a git repository.*git init/is);
     await rm(plain, { recursive: true, force: true });
+  });
+
+  it('checkReadable fails when the root is not a git repository, and does not create one', async () => {
+    const plain = await mkdtemp(join(tmpdir(), 'sf-evidence-plain-'));
+    try {
+      await expect(new GitSink(plain).checkReadable()).rejects.toThrow(/not a git repository.*git init/is);
+      await expect(run('git', ['rev-parse', '--git-dir'], { cwd: plain })).rejects.toThrow();
+    } finally {
+      await rm(plain, { recursive: true, force: true });
+    }
+  });
+
+  (process.getuid?.() === 0 ? it.skip : it)('checkReadable accepts a read-only repository that init refuses', async () => {
+    await chmod(root, 0o555);
+    try {
+      await expect(new GitSink(root).checkReadable()).resolves.toBeUndefined();
+      await expect(new GitSink(root).init()).rejects.toThrow(/EACCES/);
+    } finally {
+      await chmod(root, 0o755);
+    }
   });
 
   it('commits the batch and returns the commit sha', async () => {

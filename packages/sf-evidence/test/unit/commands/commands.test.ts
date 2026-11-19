@@ -230,9 +230,103 @@ describe('sf evidence commands', () => {
       expect(out()).toContain('Archive reachable and writable');
       expect(out()).toContain('not checked: pass --target-org');
       expect(out()).toContain('not applicable in this release');
-      // Exit follows the checks (DuckDB may or may not be on this machine), never a throw.
+      // Exit follows the checks, never a throw.
       expect([undefined, EXIT.DEGRADED]).toContain(process.exitCode);
       expect(result.ok).toBe(process.exitCode === undefined);
+    });
+
+    it('doctor runs the doctor-checks hook', async () => {
+      const row = { name: 'Query engine', level: 'ok', detail: 'DuckDB v1.5.6 (in-process, sandboxed)', checked: true };
+      const runHook = jest.spyOn(config, 'runHook').mockResolvedValue({
+        successes: [{ result: [row], plugin: { name: '@cclabsnz/sf-evidence-query' } }],
+        failures: [{ error: new Error('boom'), plugin: { name: 'broken-plugin' } }],
+      } as never);
+      try {
+        const result = await capture(new EvidenceDoctor(['--archive', root], config)).run();
+        expect(runHook).toHaveBeenCalledWith('sf-evidence:doctor-checks', {});
+        expect(result.checks).toContainEqual(row);
+        expect(result.checks.some((c) => /not installed/.test(c.detail))).toBe(false);
+        expect(result.checks).toContainEqual(
+          expect.objectContaining({ name: 'broken-plugin', level: 'warn', detail: expect.stringContaining('boom') }),
+        );
+        expect(process.exitCode).toBe(EXIT.DEGRADED);
+      } finally {
+        runHook.mockRestore();
+      }
+    });
+
+    it('doctor reports the query engine as not installed when no plugin answers the hook', async () => {
+      const runHook = jest.spyOn(config, 'runHook').mockResolvedValue({ successes: [], failures: [] } as never);
+      try {
+        const result = await capture(new EvidenceDoctor(['--archive', root], config)).run();
+        expect(result.checks).toContainEqual(
+          expect.objectContaining({ name: 'Query engine', checked: false, detail: expect.stringContaining('not installed') }),
+        );
+        expect(process.exitCode).toBeUndefined();
+      } finally {
+        runHook.mockRestore();
+      }
+    });
+
+    describe('a misbehaving doctor-checks hook', () => {
+      const good = { name: 'Query engine', level: 'ok', detail: 'fine', checked: true };
+      const plugin = { name: 'bad-plugin' };
+
+      async function withHook(impl: () => unknown) {
+        // oclif's own parse() also calls config.runHook (other events); only ours is stubbed.
+        const real = config.runHook.bind(config);
+        const runHook = jest
+          .spyOn(config, 'runHook')
+          .mockImplementation(((event: string, ...rest: unknown[]) =>
+            event === 'sf-evidence:doctor-checks' ? impl() : (real as (...a: unknown[]) => unknown)(event, ...rest)) as never);
+        try {
+          return await capture(new EvidenceDoctor(['--archive', root], config)).run();
+        } finally {
+          runHook.mockRestore();
+        }
+      }
+
+      const expectDegradedButComplete = (checks: { name: string; level: string }[], name: string) => {
+        expect(checks.map((c) => c.name)).toEqual(expect.arrayContaining(['Node version', 'Clock skew against the org']));
+        expect(checks.find((c) => c.name === name)?.level).toBe('warn');
+        expect(process.exitCode).toBe(EXIT.DEGRADED);
+        expect(out()).toMatch(/^warn\s+/m);
+      };
+
+      it('runHook rejecting yields one warn row, not a crash', async () => {
+        const result = await withHook(async () => {
+          throw new Error('loader exploded');
+        });
+        expectDegradedButComplete(result.checks, 'Doctor hook');
+        expect(result.checks.find((c) => c.name === 'Doctor hook')?.detail).toContain('loader exploded');
+      });
+
+      it.each([
+        ['undefined', undefined],
+        ['a string', 'x'],
+        ['an object', { name: 'x' }],
+      ])('a result of %s becomes a warn row', async (_label, value) => {
+        const result = await withHook(async () => ({ successes: [{ result: value, plugin }], failures: [] }));
+        expectDegradedButComplete(result.checks, 'Doctor hook (bad-plugin)');
+        expect(result.checks.find((c) => c.name === 'Doctor hook (bad-plugin)')?.detail).toMatch(/malformed/);
+      });
+
+      it('a malformed element in an array is replaced; the well-formed rows survive', async () => {
+        const result = await withHook(async () => ({
+          successes: [{ result: [good, null, { name: 'x', level: 'bogus', detail: 'd', checked: true }], plugin }],
+          failures: [],
+        }));
+        expectDegradedButComplete(result.checks, 'Doctor hook (bad-plugin)');
+        expect(result.checks).toContainEqual(good);
+        expect(result.checks.filter((c) => c.name === 'Doctor hook (bad-plugin)')).toHaveLength(2);
+      });
+
+      it('a fail a plugin reports itself is kept and exits 1', async () => {
+        const fail = { name: 'Query engine', level: 'fail', detail: 'broken', checked: true };
+        const result = await withHook(async () => ({ successes: [{ result: [fail], plugin }], failures: [] }));
+        expect(result.checks).toContainEqual(fail);
+        expect(process.exitCode).toBe(EXIT.ERROR);
+      });
     });
 
     it('contacts no org unless --target-org is given, whatever default org exists', async () => {

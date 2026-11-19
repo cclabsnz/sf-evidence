@@ -8,13 +8,28 @@ import {
   type Check,
   type DoctorEnv,
 } from '@cclabsnz/sf-evidence-engine';
-import { DEFAULT_ARCHIVE, resolveSink } from '../../lib/flags.js';
+import { DEFAULT_ARCHIVE, resolveSink } from '@cclabsnz/sf-evidence-engine';
 import { gitConfig, readVersions, which } from '../../lib/doctorEnv.js';
 import { readOrgClock } from '../../lib/orgClock.js';
 
 export interface DoctorResult {
   checks: Check[];
   ok: boolean;
+}
+
+const malformed = (name: string, detail: string): Check => ({ name, level: 'warn', detail, checked: true });
+
+/** The shape `formatChecks` and `doctorExitCode` dereference; a plugin's rows are untrusted input. */
+function isCheck(v: unknown): v is Check {
+  if (typeof v !== 'object' || v === null) return false;
+  const c = v as Record<string, unknown>;
+  return (
+    typeof c.name === 'string' &&
+    typeof c.detail === 'string' &&
+    (c.level === 'ok' || c.level === 'warn' || c.level === 'fail') &&
+    typeof c.checked === 'boolean' &&
+    (c.remediation === undefined || typeof c.remediation === 'string')
+  );
 }
 
 export default class EvidenceDoctor extends SfCommand<DoctorResult> {
@@ -60,6 +75,7 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
       orgId: flags['org-id'],
       which,
       gitConfig: (key) => gitConfig(flags.archive, key),
+      extraChecks: () => this.hookChecks(),
       orgNow: target ? () => this.orgClock(target) : undefined,
     } satisfies DoctorEnv);
 
@@ -68,6 +84,42 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
     // Non-throwing, so --json keeps `result`.
     setExitCode(exit);
     return { checks, ok: exit === 0 };
+  }
+
+  /**
+   * Rows contributed by other plugins through the `sf-evidence:doctor-checks` hook (the query
+   * plugin's "Query engine" row). Nothing a plugin does may take `doctor` down or pass unnoticed:
+   * a hook that throws, a runHook that rejects, and a result that is not an array of well-formed
+   * rows each become one warning row. A `fail` a plugin reports itself is kept as it is.
+   */
+  protected async hookChecks(): Promise<Check[]> {
+    let ran: Awaited<ReturnType<typeof this.config.runHook>>;
+    try {
+      ran = await this.config.runHook('sf-evidence:doctor-checks', {});
+    } catch (err) {
+      return [malformed('Doctor hook', `the hook could not run: ${err instanceof Error ? err.message : String(err)}`)];
+    }
+    const rows: Check[] = [];
+    for (const s of ran.successes) {
+      const who = `Doctor hook (${s.plugin.name})`;
+      if (!Array.isArray(s.result)) {
+        rows.push(malformed(who, 'malformed result: expected an array of checks'));
+        continue;
+      }
+      for (const row of s.result as unknown[]) {
+        rows.push(isCheck(row) ? row : malformed(who, 'malformed result: an entry is not a well-formed check'));
+      }
+    }
+    for (const f of ran.failures) {
+      rows.push({
+        name: f.plugin.name,
+        level: 'warn',
+        detail: `its doctor check failed: ${f.error.message}`,
+        remediation: `Reinstall it with \`sf plugins install ${f.plugin.name}\`.`,
+        checked: true,
+      });
+    }
+    return rows;
   }
 
   /** The only place doctor resolves an org; reached only from an explicit --target-org. */

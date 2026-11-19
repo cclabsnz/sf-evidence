@@ -10,7 +10,7 @@ import {
   type StatusRow,
   type TimeWindow,
 } from '@cclabsnz/sf-evidence-engine';
-import { DEFAULT_ARCHIVE, resolveSink } from '../../lib/flags.js';
+import { DEFAULT_ARCHIVE, resolveSink } from '@cclabsnz/sf-evidence-engine';
 
 /**
  * One source in the JSON result (SPEC.md §8.4, plus `kind`, `pending`, `lost` and `stale`

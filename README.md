@@ -36,11 +36,28 @@ is close to being deleted.
 |---|---|
 | Sources | `audit-trail` (Setup Audit Trail), `limits` (org limits, sampled each run) |
 | Sinks | `local` filesystem, `git` (with optional signed commits) |
-| Commands | `collect`, `status`, `verify`, `explain`, `doctor` |
+| Commands | `collect`, `status`, `verify`, `explain`, `doctor`, and `query` in a separate plugin |
 | Format | NDJSON records, JCS + SHA-256 hash chain, Merkle root per source |
 
-Login History, S3 with Object Lock, SQL queries over the archive and rule packs are
-specified but not built yet. The [plugin README](packages/sf-evidence/README.md) lists the
+Login History, S3 with Object Lock, Parquet and rule packs are specified but not built
+yet.
+
+## Ask the archive questions in SQL
+
+`sf evidence query` runs SQL over the archive on your machine, through three views:
+`setup_changes`, `limit_samples` and `records`. It's a separate plugin, so a scheduled job
+that only collects never downloads DuckDB:
+
+```bash
+sf plugins install @cclabsnz/sf-evidence @cclabsnz/sf-evidence-query
+sf evidence query --org-id <your-org-id> --sql "SELECT performed_by, count(*) AS n FROM setup_changes WHERE via_login_as GROUP BY ALL"
+```
+
+It contacts no org and no network, writes nothing, and reads only the record files the
+hash chain covers. Its results aren't verified, so run `verify` too when the answer is
+going to an auditor. [Query the archive with SQL](docs/query.md) has install notes and
+five worked questions, and [`docs/query-views.md`](docs/query-views.md) lists every
+column. The [plugin README](packages/sf-evidence/README.md) lists the
 limitations plainly. Read them before you rely on it.
 
 ## Packages
@@ -48,6 +65,7 @@ limitations plainly. Read them before you rely on it.
 | Package | |
 |---|---|
 | [`@cclabsnz/sf-evidence`](packages/sf-evidence) | The `sf evidence` plugin. Start here. |
+| [`@cclabsnz/sf-evidence-query`](packages/sf-evidence-query) | `sf evidence query`: read-only SQL over the archive, in a sandboxed in-process DuckDB. |
 | [`@cclabsnz/sf-evidence-engine`](packages/sf-evidence-engine) | Collectors, chain, sinks and archive reader, usable without the `sf` CLI. |
 
 ## Development
@@ -56,7 +74,7 @@ limitations plainly. Read them before you rely on it.
 pnpm install
 pnpm build
 pnpm test
-bash scripts/check-pack.sh   # the packed CLI must depend on the engine by semver, not workspace:
+bash scripts/check-pack.sh   # packed plugins depend on the engine by semver, not workspace:
 ```
 
 ## License

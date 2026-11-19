@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { monthKey } from '../lib/time.js';
 import type { SourceId } from '../types/record.js';
 
@@ -12,11 +13,69 @@ export const STATE_DIR = '_state';
  */
 const ORG_ID_RE = /^[a-zA-Z0-9]{18}$/;
 
+/**
+ * Whether `s` is an org id this archive accepts as a partition name. Exported so a command can
+ * refuse a malformed `--org-id` as a usage error before it touches the archive, by the same
+ * rule `orgPrefix` would later throw on.
+ */
+export function isOrgId(s: string): boolean {
+  return ORG_ID_RE.test(s);
+}
+
 export function orgPrefix(orgId: string): string {
-  if (!ORG_ID_RE.test(orgId)) {
+  if (!isOrgId(orgId)) {
     throw new Error(`Invalid org id: ${orgId} (expected 18 alphanumeric characters).`);
   }
   return `org_id=${orgId}`;
+}
+
+/**
+ * Inverse of `orgPrefix` for a directory name: the org id, or null for anything that is not
+ * an `org_id=<18 alphanumerics>` partition. Null rather than a throw because callers scan
+ * directory listings, where `_tmp`, stray files and malformed names are expected noise and
+ * must be skipped, not fatal. Lives here so this module stays the only one that knows the
+ * Hive spelling.
+ */
+export function parseOrgDir(name: string): string | null {
+  const prefix = 'org_id=';
+  if (!name.startsWith(prefix)) return null;
+  const id = name.slice(prefix.length);
+  return ORG_ID_RE.test(id) ? id : null;
+}
+
+/**
+ * An archive-relative path (always forward slashes, as manifests record it) joined onto an
+ * absolute root with the platform's separator. Splitting then joining, rather than string
+ * concatenation, keeps Windows roots correct and `join` normalises any stray `..` segments.
+ */
+export function absoluteRecordPath(root: string, relPath: string): string {
+  return join(root, ...relPath.split('/'));
+}
+
+const YEAR_RE = /^year=\d{4}$/;
+const MONTH_RE = /^month=(0[1-9]|1[0-2])$/;
+/** A plain `.ndjson` file name: no separator of either kind, no leading dot, so never `.` or `..`. */
+const RECORD_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.ndjson$/;
+
+/**
+ * Whether an archive-relative path has the shape `recordFilePath` writes for this org and
+ * source: `org_id=<orgId>/source=<source>/year=YYYY/month=MM/<name>.ndjson`. Segment by segment,
+ * so a manifest entry naming another org, another source, `_state/`, an absolute path or any
+ * `..` fails. `query` uses it to refuse manifest paths it would otherwise hand to DuckDB's
+ * `allowed_paths`: the chain says which files are evidence, but an edited manifest must not be
+ * able to say a file outside the record layout is.
+ */
+export function isRecordPath(relPath: string, orgId: string, source: SourceId): boolean {
+  const seg = relPath.split('/');
+  return (
+    seg.length === 5 &&
+    isOrgId(orgId) &&
+    seg[0] === `org_id=${orgId}` &&
+    seg[1] === `source=${source}` &&
+    YEAR_RE.test(seg[2]!) &&
+    MONTH_RE.test(seg[3]!) &&
+    RECORD_NAME_RE.test(seg[4]!)
+  );
 }
 
 export interface RecordPathArgs {

@@ -13,6 +13,18 @@
 // Archive reading — the only component permitted to assume the archive's on-disk layout
 // (SPEC.md §3.1, §5.1).
 export { ArchiveReader, type SourceSummary } from './archive/reader.js';
+export { resolveQueryFiles, type QueryFiles } from './archive/queryFiles.js';
+// The org id rule, so `query` can refuse a malformed --org-id as a usage error up front.
+export { isOrgId } from './sinks/layout.js';
+// The query views as data, and their compilation to DuckDB (design §5.5).
+export {
+  VIEWS,
+  type Dialect,
+  type ViewColumn,
+  type ViewColumnType,
+  type ViewDefinition,
+} from './query/views.js';
+export { compileDuckdbViews } from './query/compileDuckdb.js';
 export { formatStatus } from './lib/statusFormat.js';
 export {
   assessStatus,
@@ -76,6 +88,9 @@ export {
 // decides whether to evaluate the git anchor with `instanceof GitSink`.
 export { LocalSink } from './sinks/local.js';
 export { GitSink, type GitSinkOptions } from './sinks/git.js';
+// `--archive` / `--sink` resolution lives here, not in the CLI, so every plugin that takes
+// those flags (`collect`, `query`) resolves them identically.
+export { DEFAULT_ARCHIVE, resolveSink, resolveSinks, type SinkResolveOptions } from './sinks/resolve.js';
 
 // Collection path, for hosts that write archives.
 export {

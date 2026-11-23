@@ -90,3 +90,44 @@ Time column: `sampled_at_utc`
 ### Known gaps
 
 - Only top-level limits are included. Nested sub-limits (e.g. PermissionSets.CreateCustom) are left out; read them from records.payload.
+
+## login_history
+
+Version 1. Grain: One row per login attempt.
+
+Login attempts from LoginHistory, successful and failed, with the verbatim Salesforce fields flattened to columns.
+
+Sources: `login-history`.
+
+Time column: `occurred_at_utc`
+
+| name | type | description |
+| --- | --- | --- |
+| `occurred_at_utc` | `TIMESTAMP` | LoginTime, UTC wall time. |
+| `occurred_at_local` | `TIMESTAMPTZ` | LoginTime as an instant, shown in the --timezone zone. |
+| `user_id` | `VARCHAR` | UserId: the user who attempted the login. LoginHistory carries no username. |
+| `status` | `VARCHAR` | Status, verbatim: Success or Salesforce's failure text (e.g. Invalid Password). |
+| `login_type` | `VARCHAR` | LoginType, verbatim (e.g. Application, Remote Access 2.0). |
+| `login_sub_type` | `VARCHAR` | LoginSubType, verbatim (e.g. OAuth 2.0 Web Server Flow). |
+| `application` | `VARCHAR` | Application the login came through, verbatim. |
+| `browser` | `VARCHAR` | Browser, verbatim. |
+| `platform` | `VARCHAR` | Platform (operating system), verbatim. |
+| `source_ip` | `VARCHAR` | SourceIp: the IP address the login came from. |
+| `forwarded_for_ip` | `VARCHAR` | ForwardedForIp: the client address behind a proxy, when Salesforce recorded one. |
+| `country_iso` | `VARCHAR` | CountryIso: two-letter country code Salesforce resolved from the IP. NULL when it could not. |
+| `login_url` | `VARCHAR` | LoginUrl: the host the user logged in at. |
+| `api_type` | `VARCHAR` | ApiType, verbatim (e.g. SOAP Enterprise). NULL for UI logins. |
+| `api_version` | `VARCHAR` | ApiVersion of the login, verbatim (e.g. 64.0). Not the version the record was collected with. |
+| `auth_method_reference` | `VARCHAR` | AuthMethodReference: how the user authenticated (e.g. password, MFA), verbatim. |
+| `tls_protocol` | `VARCHAR` | TlsProtocol, verbatim (e.g. TLS 1.3). |
+| `auth_context_class_ref` | `VARCHAR` | AuthContextClassRef: the authentication context class, verbatim. |
+| `source_id` | `VARCHAR` | Dedupe key of the record: the Salesforce Id for event sources, the hour bucket for limits. |
+| `org_id` | `VARCHAR` | 18-character Salesforce org id, from the archive partition the record file lives in. |
+| `org_label` | `VARCHAR` | The org's name from org.json in the archive; NULL when org.json is missing or unreadable. |
+| `collected_at_utc` | `TIMESTAMP` | When the collecting run started, UTC wall time. Local clock, advisory only. |
+
+### Known gaps
+
+- No username: LoginHistory carries only UserId. Join user_id to setup_changes.performed_by_id to name users who also made setup changes.
+- Status is free text from Salesforce (e.g. Success, Invalid Password); match on it, don't assume a closed list.
+- forwarded_for_ip, auth_method_reference and auth_context_class_ref are NULL for records collected after the org rejected them (see the manifest's fieldsDropped).

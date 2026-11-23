@@ -44,8 +44,8 @@ yet.
 
 ## Ask the archive questions in SQL
 
-`sf evidence query` runs SQL over the archive on your machine, through three views:
-`setup_changes`, `limit_samples` and `records`. It's a separate plugin, so a scheduled job
+`sf evidence query` runs SQL over the archive on your machine, through four views:
+`setup_changes`, `limit_samples`, `login_history` and `records`. It's a separate plugin, so a scheduled job
 that only collects never downloads DuckDB:
 
 ```bash
@@ -56,7 +56,7 @@ sf evidence query --org-id <your-org-id> --sql "SELECT performed_by, count(*) AS
 It contacts no org and no network, writes nothing, and reads only the record files the
 hash chain covers. Its results aren't verified, so run `verify` too when the answer is
 going to an auditor. [Query the archive with SQL](docs/query.md) has install notes and
-five worked questions, and [`docs/query-views.md`](docs/query-views.md) lists every
+six worked questions, and [`docs/query-views.md`](docs/query-views.md) lists every
 column. The [plugin README](packages/sf-evidence/README.md) lists the
 limitations plainly. Read them before you rely on it.
 

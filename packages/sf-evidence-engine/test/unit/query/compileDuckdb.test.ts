@@ -6,6 +6,7 @@ import type { SourceId } from '../../../src/types/record.js';
 const ORG_A = '00D5j000000AbCdEAK';
 const ORG_B = '00D000000000002AAA';
 const AUDIT = `/arch/org_id=${ORG_A}/source=audit-trail/year=2026/month=08/part-1.ndjson`;
+const LOGINS = `/arch/org_id=${ORG_A}/source=login-history/year=2026/month=10/part-3.ndjson`;
 const LIMITS = `/arch/org_id=${ORG_A}/source=limits/year=2026/month=11/part-2.ndjson`;
 
 function files(bySource: Partial<Record<SourceId, string[]>>, orgLabels: Record<string, string | null> = {}): QueryFiles {
@@ -49,7 +50,8 @@ describe('compileDuckdbViews', () => {
   });
 
   it('casts every column to its declared type', () => {
-    const sqls = compileDuckdbViews({ files: full, timezone: 'UTC' });
+    const everySource = files({ 'audit-trail': [AUDIT], 'login-history': [LOGINS], limits: [LIMITS] });
+    const sqls = compileDuckdbViews({ files: everySource, timezone: 'UTC' });
     for (const v of VIEWS) {
       const s = stmt(sqls, v.name);
       for (const c of v.columns) expect(s).toContain(`CAST(${c.expr.duckdb} AS ${c.type}) AS ${c.name}`);
@@ -82,6 +84,18 @@ describe('compileDuckdbViews', () => {
     const def = VIEWS.find((v) => v.name === 'limit_samples')!;
     const items = def.columns.map((c) => `CAST(NULL AS ${c.type}) AS ${c.name}`).join(', ');
     expect(s).toBe(`CREATE VIEW limit_samples AS SELECT ${items} WHERE false`);
+  });
+
+  it('login_history reads only login-history files, and is a typed empty SELECT without them', () => {
+    const withLogins = files({ 'audit-trail': [AUDIT], 'login-history': [LOGINS] });
+    const sqls = compileDuckdbViews({ files: withLogins, timezone: 'UTC' });
+    expect(stmt(sqls, 'login_history')).toContain(`read_ndjson(['${LOGINS}']`);
+    expect(stmt(sqls, 'login_history')).not.toContain(AUDIT);
+    expect(stmt(sqls, 'setup_changes')).not.toContain(LOGINS);
+    const empty = stmt(compileDuckdbViews({ files: full, timezone: 'UTC' }), 'login_history');
+    const def = VIEWS.find((v) => v.name === 'login_history')!;
+    const items = def.columns.map((c) => `CAST(NULL AS ${c.type}) AS ${c.name}`).join(', ');
+    expect(empty).toBe(`CREATE VIEW login_history AS SELECT ${items} WHERE false`);
   });
 
   it('compiles records empty when the archive holds no files at all', () => {

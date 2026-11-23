@@ -160,6 +160,17 @@ describe('sf evidence query', () => {
       expect(ids(result)).toEqual([FIXTURE.ids.a1]);
     });
 
+    it('--view login_history bounds on occurred_at_utc, [from, to)', async () => {
+      const { ok, noCountry, bad1, bad2 } = FIXTURE.login.ids;
+      const all = await query([...orgA, '--view', 'login_history']);
+      expect(ids(all.result)).toEqual([ok, bad1, bad2, noCountry]);
+      const day = await query([...orgA, '--view', 'login_history', '--from', '2026-10-05', '--to', '2026-10-06']);
+      expect(day.exit).toBe(EXIT.OK);
+      expect(ids(day.result)).toEqual([ok, bad1]);
+      const tail = await query([...orgA, '--view', 'login_history', '--from', '2026-10-06']);
+      expect(ids(tail.result)).toEqual([bad2, noCountry]);
+    });
+
     it('--to 2026-08-14 excludes it', async () => {
       const { result, exit } = await query([...orgA, '--view', 'setup_changes', '--to', '2026-08-14']);
       expect(exit).toBe(EXIT.OK);

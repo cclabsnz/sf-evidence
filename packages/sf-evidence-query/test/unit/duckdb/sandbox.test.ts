@@ -247,10 +247,10 @@ describe('DuckDB sandbox session', () => {
       expect(r.rows).toEqual([{ a: 1 }]);
     });
 
-    it('SELECT count(*) AS n FROM records over both orgs is 5 (orphan excluded)', async () => {
+    it('SELECT count(*) AS n FROM records over both orgs is 9: 4 setup changes, 1 limits sample, 4 logins (orphan excluded)', async () => {
       const s = await open();
       const r = await s.run('SELECT count(*) AS n FROM records');
-      expect(Number(r.rows[0]!.n)).toBe(5);
+      expect(Number(r.rows[0]!.n)).toBe(9);
       const ids = await s.run('SELECT source_id FROM records');
       expect(ids.rows.map((row) => row.source_id)).not.toContain(FIXTURE.ids.orphan);
     });
@@ -301,8 +301,8 @@ describe('DuckDB sandbox session', () => {
     const r = await s.run('SELECT * FROM records', 2);
     expect(r.rows).toHaveLength(2);
     expect(r.truncated).toBe(true);
-    const all = await s.run('SELECT * FROM records', 5);
-    expect(all.rows).toHaveLength(5);
+    const all = await s.run('SELECT * FROM records', 9);
+    expect(all.rows).toHaveLength(9);
     expect(all.truncated).toBe(false);
   });
 });
@@ -351,7 +351,7 @@ describe('rejects side-effecting functions', () => {
       if (row.name === 'enable_profiling') expect(row.value).toBeNull();
       if (row.name === 'logging_storage') expect(String(row.value)).toBe('memory');
     }
-    expect(Number((await s.run('SELECT count(*) AS n FROM records')).rows[0]!.n)).toBe(5);
+    expect(Number((await s.run('SELECT count(*) AS n FROM records')).rows[0]!.n)).toBe(9);
     s.close();
     session = undefined;
     // Reaching this line means close() returned and the process is alive.

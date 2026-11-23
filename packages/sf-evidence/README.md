@@ -165,12 +165,12 @@ sf evidence query --org-id <your-org-id> --view setup_changes --from 2026-08-01 
 sf evidence query --org-id <your-org-id> --sql "SELECT action, count(*) AS n FROM setup_changes GROUP BY ALL ORDER BY n DESC"
 ```
 
-`query` runs one read-only `SELECT` over three views, `setup_changes`, `limit_samples` and
+`query` runs one read-only `SELECT` over four views, `setup_changes`, `limit_samples`, `login_history` and
 `records`, in DuckDB inside the command. It is its own plugin so that installing
 `sf-evidence` for a scheduled job never downloads DuckDB. It contacts no org and no
 network, writes nothing, and reads only the record files the hash chain covers. Its results
 are not verified: run `verify` as well when the answer is going to an auditor.
-[Query the archive with SQL](https://github.com/cclabsnz/sf-evidence/blob/main/docs/query.md) has install notes and five worked
+[Query the archive with SQL](https://github.com/cclabsnz/sf-evidence/blob/main/docs/query.md) has install notes and six worked
 questions; [`query-views.md`](https://github.com/cclabsnz/sf-evidence/blob/main/docs/query-views.md) lists every column.
 
 ### `_state/` is a disposable cache

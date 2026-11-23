@@ -26,10 +26,11 @@ sf evidence query --all-orgs --sql "SELECT org_label, action, count(*) AS n FROM
 sf evidence query --org-id 00D5j000000AbCdEAK --file ./who-changed-profiles.sql --format ndjson
 ```
 
-There are three views: `setup_changes` (Setup Audit Trail, with Login-As resolved),
-`limit_samples` (one row per limit per sample) and `records` (every record, with its
+There are four views: `setup_changes` (Setup Audit Trail, with Login-As resolved),
+`limit_samples` (one row per limit per sample), `login_history` (one row per login
+attempt) and `records` (every record, with its
 payload as JSON). [Query the archive with SQL](https://github.com/cclabsnz/sf-evidence/blob/main/docs/query.md)
-covers the flags, time zones and five worked questions.
+covers the flags, time zones and six worked questions.
 [`query-views.md`](https://github.com/cclabsnz/sf-evidence/blob/main/docs/query-views.md)
 lists every column.
 

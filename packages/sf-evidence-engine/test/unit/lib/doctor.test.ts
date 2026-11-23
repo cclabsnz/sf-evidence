@@ -207,4 +207,51 @@ describe('doctor', () => {
       'skipped Licence: not applicable in this release',
     ]);
   });
+
+  describe('Login History access', () => {
+    const apiError = (errorCode: string) => Object.assign(new Error(`${errorCode}: nope`), { errorCode, statusCode: 400, name: 'ApiError' });
+
+    it('is not checked without a probe', async () => {
+      const c = find(await runChecks(env()), 'login history');
+      expect(c).toMatchObject({
+        name: 'Login History access',
+        level: 'ok',
+        checked: false,
+        detail: 'not checked: pass --target-org to test access',
+      });
+    });
+
+    it('is ok and checked when the probe resolves', async () => {
+      const c = find(await runChecks(env({ probeLoginHistory: async () => undefined })), 'login history');
+      expect(c.level).toBe('ok');
+      expect(c.checked).toBe(true);
+    });
+
+    it.each(['INSUFFICIENT_ACCESS', 'INSUFFICIENT_ACCESS_OR_READONLY', 'INVALID_TYPE'])(
+      'warns and names the permission on %s',
+      async (code) => {
+        const checks = await runChecks(env({ probeLoginHistory: async () => Promise.reject(apiError(code)) }));
+        const c = find(checks, 'login history');
+        expect(c.level).toBe('warn');
+        expect(c.checked).toBe(true);
+        expect(`${c.detail} ${c.remediation ?? ''}`).toContain('Monitor Login History');
+        expect(`${c.detail} ${c.remediation ?? ''}`).toContain('MonitorLoginHistory');
+        expect(doctorExitCode(checks)).toBe(EXIT.DEGRADED);
+      },
+    );
+
+    it('warns with the message on any other failure', async () => {
+      const c = find(
+        await runChecks(env({ probeLoginHistory: async () => Promise.reject(new Error('socket hang up')) })),
+        'login history',
+      );
+      expect(c.level).toBe('warn');
+      expect(c.detail).toContain('socket hang up');
+    });
+
+    it('sits right after the clock check', async () => {
+      const names = (await runChecks(env())).map((x) => x.name);
+      expect(names.indexOf('Login History access')).toBe(names.indexOf('Clock skew against the org') + 1);
+    });
+  });
 });

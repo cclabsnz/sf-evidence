@@ -36,7 +36,7 @@ export default class EvidenceDoctor extends SfCommand<DoctorResult> {
   public static readonly summary = 'Check this machine and archive are ready to collect evidence';
 
   public static readonly description = `Environment diagnostics. Needs no org: it contacts Salesforce only when you pass
---target-org, and then only to read the org's clock.
+--target-org, and then only to read the org's clock and test read access to LoginHistory.
 
 It writes nothing. Archive writability is judged by asking the sink whether the target exists
 and is writable; no file is created to find out. Checks that do not apply to this release are
@@ -56,7 +56,7 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
     // only from an explicit value.
     'target-org': Flags.string({
       char: 'o',
-      summary: "Also compare this machine's clock with the org's. The only flag that contacts an org.",
+      summary: "Also compare this machine's clock with the org's and test Login History access. The only flag that contacts an org.",
       helpValue: '<alias or username>',
     }),
     'org-id': Flags.string({ summary: 'Also read the chain head for this org id partition.' }),
@@ -77,6 +77,7 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
       gitConfig: (key) => gitConfig(flags.archive, key),
       extraChecks: () => this.hookChecks(),
       orgNow: target ? () => this.orgClock(target) : undefined,
+      probeLoginHistory: target ? () => this.probeLoginHistory(target) : undefined,
     } satisfies DoctorEnv);
 
     for (const line of formatChecks(checks)) this.log(line);
@@ -120,6 +121,12 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
       });
     }
     return rows;
+  }
+
+  /** One-row read of LoginHistory over the connection doctor builds for --target-org. */
+  protected async probeLoginHistory(aliasOrUsername: string): Promise<void> {
+    const org = await Org.create({ aliasOrUsername });
+    await org.getConnection().query('SELECT Id FROM LoginHistory LIMIT 1');
   }
 
   /** The only place doctor resolves an org; reached only from an explicit --target-org. */

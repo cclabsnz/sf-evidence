@@ -23,7 +23,7 @@ who has to sign off on running this, so they do not have to read the source firs
   ];
 
   public static readonly flags = {
-    source: Flags.string({ summary: 'Sources to explain.', default: 'audit-trail' }),
+    source: Flags.string({ summary: 'Sources to explain.', default: 'audit-trail,login-history' }),
     sink: Flags.string({ summary: 'Sinks to explain.', default: 'local' }),
     archive: Flags.string({ summary: 'Archive root directory.', default: DEFAULT_ARCHIVE }),
     'instance-url': Flags.string({

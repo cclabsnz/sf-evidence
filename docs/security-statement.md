@@ -54,7 +54,7 @@ These are the same for every sink.
   SELECT Id, UserId, LoginTime, LoginType, LoginSubType, Status, Application, Browser, Platform, SourceIp, CountryIso, LoginGeoId, LoginUrl, NetworkId, ApiType, ApiVersion, ClientVersion, AuthenticationServiceId, CipherSuite, TlsProtocol, OptionsIsGet, OptionsIsPost, ForwardedForIp, AuthMethodReference, AuthContextClassRef FROM LoginHistory WHERE LoginTime >= <from> AND LoginTime < <to> ORDER BY LoginTime ASC, Id ASC
   ```
 
-The audit-trail <from> and <to> are the collection window, sliced by month and narrowed on timeout.
+The audit-trail and login-history <from> and <to> are the collection window, sliced and narrowed on timeout.
 
 ## Sink: local
 

@@ -269,4 +269,15 @@ describe('org destination wording', () => {
     expect(e.destinations[0]!.purpose).toMatch(/SOQL/);
     expect(e.destinations[0]!.purpose).toMatch(/REST/);
   });
+
+  it('lists the LoginHistory query, with its permission, for the default sources', () => {
+    const e = buildExplanation({
+      sources: ['audit-trail', 'login-history'],
+      sinks: [new LocalSink('/tmp/archive')],
+      instanceUrl: 'https://example.my.salesforce.com',
+    });
+    const q = e.queries.find((x) => x.object === 'LoginHistory');
+    expect(q).toBeDefined();
+    expect(q!.permission).toContain('MonitorLoginHistory');
+  });
 });

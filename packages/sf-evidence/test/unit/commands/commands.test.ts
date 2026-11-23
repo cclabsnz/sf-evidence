@@ -400,6 +400,7 @@ describe('sf evidence commands', () => {
       expect(cmd).toBeInstanceOf(EvidenceCollect);
       // resolveSinks is the guard; the command wires --sink straight into it.
       expect(EvidenceCollect.flags.sink.default).toBe('local');
+      expect(EvidenceCollect.flags.source.default).toBe('audit-trail,login-history');
       expect(EvidenceCollect.flags.sign).toBeDefined();
     });
 

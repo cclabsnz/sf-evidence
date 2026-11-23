@@ -43,8 +43,8 @@ full available window; every run after that is idempotent and adds only what is 
     'target-org': Flags.requiredOrg(),
     source: Flags.string({
       summary: 'Sources to collect (comma-separated).',
-      default: 'audit-trail',
-      helpValue: 'audit-trail|limits',
+      default: 'audit-trail,login-history',
+      helpValue: 'audit-trail|login-history|limits',
     }),
     sink: Flags.string({
       summary: 'Sinks to write to (comma-separated).',

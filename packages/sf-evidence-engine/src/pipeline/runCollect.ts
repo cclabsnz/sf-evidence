@@ -730,7 +730,9 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
             sr.roundsWritten += 1;
             if (sr.sink.capabilities.canonical) canonicalWrote = true;
             if (sr.sink === primary) primaryWrote = true;
-            if (out.commit !== undefined) sr.commit = out.commit;
+            // The last round's commit, or none: an earlier round's commit must not read as
+            // anchoring the head round when that round's commit failed.
+            sr.commit = out.commit;
             if (out.pushPending) sr.pushPending = true;
             // A failed anchoring commit is not a failed write: the batch is on disk. It is
             // still recorded, and still makes the run degraded, because the sink did not do

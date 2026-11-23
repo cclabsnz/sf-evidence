@@ -29,3 +29,27 @@ describe('classifyDegradation', () => {
     expect(classifyDegradation(new Error('socket hang up'), 'audit-trail')).toBeNull();
   });
 });
+
+describe('classifyDegradation remediation names the source permission', () => {
+  it('keeps the audit-trail text byte-identical', () => {
+    expect(classifyDegradation(apiError('INSUFFICIENT_ACCESS'), 'audit-trail')!.remediation).toBe(
+      'Grant the running user the "View Setup and Configuration" permission, then re-run.',
+    );
+    expect(
+      classifyDegradation(apiError('INSUFFICIENT_ACCESS_OR_READONLY'), 'audit-trail')!.remediation,
+    ).toBe('Grant the running user the "View Setup and Configuration" permission, then re-run.');
+    expect(classifyDegradation(apiError('INVALID_TYPE'), 'audit-trail')!.remediation).toBe(
+      'The object is not available in this org or is not visible to the running user. Confirm the org edition and the "View Setup and Configuration" permission.',
+    );
+  });
+
+  it.each(['INSUFFICIENT_ACCESS', 'INSUFFICIENT_ACCESS_OR_READONLY', 'INVALID_TYPE'])(
+    'names Monitor Login History for login-history on %s',
+    (code) => {
+      const r = classifyDegradation(apiError(code), 'login-history')!.remediation;
+      expect(r).toContain('Monitor Login History');
+      expect(r).toContain('MonitorLoginHistory');
+      expect(r).not.toContain('View Setup');
+    },
+  );
+});

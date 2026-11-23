@@ -20,7 +20,7 @@ const ctx = (rest?: RestClient, collectedAt = COLLECTED_AT) => ({
   soql: {} as SoqlClient,
   rest,
   orgId: ORG_ID,
-  apiVersion: '64.0',
+  apiVersion: '67.0',
   collectedAt,
 });
 

@@ -114,6 +114,52 @@ describe('runCollect', () => {
     expect(manifest!.degradations[0]!.code).toBe('INSUFFICIENT_ACCESS');
   });
 
+  it('archives audit-trail and reports the run degraded when LoginHistory is not readable', async () => {
+    const soql = fakeSoql(async (q) => {
+      if (q.includes('FROM LoginHistory')) {
+        throw Object.assign(new Error('no access'), {
+          errorCode: 'INSUFFICIENT_ACCESS',
+          statusCode: 403,
+          name: 'ApiError',
+        });
+      }
+      return [ROW];
+    });
+    const result = await runCollect({
+      ...base(),
+      sources: ['audit-trail' as const, 'login-history' as const],
+      soql,
+    });
+
+    const audit = result.sources.find((s) => s.source === 'audit-trail')!;
+    const login = result.sources.find((s) => s.source === 'login-history')!;
+    expect(audit.status).toBe('complete');
+    expect(audit.recordsWritten).toBe(1);
+    expect(login.status).toBe('degraded');
+    expect(login.recordsWritten).toBe(0);
+    expect(result.degraded).toBe(true);
+  });
+
+  it('reports degraded when the only degradation is a field downgrade on a complete source', async () => {
+    let first = true;
+    const soql = fakeSoql(async (q) => {
+      if (q.includes('FROM LoginHistory') && first) {
+        first = false;
+        throw Object.assign(new Error('No such column'), {
+          errorCode: 'INVALID_FIELD',
+          statusCode: 400,
+          name: 'ApiError',
+        });
+      }
+      return [];
+    });
+    const result = await runCollect({ ...base(), sources: ['login-history' as const], soql });
+
+    expect(result.sources[0]!.status).toBe('complete');
+    expect(result.sources[0]!.degradations).toHaveLength(1);
+    expect(result.degraded).toBe(true);
+  });
+
   it('puts every failed slice of a source into the manifest degradations', async () => {
     let call = 0;
     const soql = fakeSoql(async () => {

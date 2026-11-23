@@ -1,7 +1,7 @@
 import type { SoqlClient } from '@cclabsnz/sf-core';
 
 /** The API version this plugin negotiates. Bumped deliberately, never floated. */
-export const API_VERSION = '64.0';
+export const API_VERSION = '67.0';
 
 /**
  * The one query this plugin issues that no collector owns: it resolves the archive's

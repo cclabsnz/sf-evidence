@@ -23,7 +23,7 @@ const T2 = '2026-08-16T09:00:00.000Z';
 const args = (over: Partial<Parameters<typeof buildMetadataFiles>[0]> = {}) => ({
   orgInfo: INFO,
   instanceUrl: 'https://acme.my.salesforce.com',
-  apiVersion: '64.0',
+  apiVersion: '67.0',
   producer: PRODUCER,
   existing: { archive: null, org: null },
   now: T1,
@@ -61,7 +61,7 @@ describe('buildMetadataFiles', () => {
       instance: 'AP5',
       is_sandbox: false,
       instance_url: 'https://acme.my.salesforce.com',
-      api_version: '64.0',
+      api_version: '67.0',
       first_seen: T1,
     });
     expect(org.sha256).toMatch(/^sha256:[0-9a-f]{64}$/);

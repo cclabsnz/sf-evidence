@@ -1,5 +1,6 @@
 import { AuditTrailCollector } from './auditTrail.js';
 import { LimitsCollector } from './limits.js';
+import { LoginHistoryCollector } from './loginHistory.js';
 import type { Collector } from '../types/collector.js';
 import type { SourceId } from '../types/record.js';
 
@@ -10,6 +11,7 @@ import type { SourceId } from '../types/record.js';
 export const COLLECTORS: Partial<Record<SourceId, Collector>> = {
   'audit-trail': new AuditTrailCollector(),
   limits: new LimitsCollector(),
+  'login-history': new LoginHistoryCollector(),
 };
 
 export function getCollector(source: SourceId): Collector {

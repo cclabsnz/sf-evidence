@@ -1,4 +1,9 @@
-import { normaliseAuditTrailRow, AUDIT_TRAIL_FIELDS } from '../../../src/collectors/normalise.js';
+import {
+  normaliseAuditTrailRow,
+  AUDIT_TRAIL_FIELDS,
+  normaliseLoginHistoryRow,
+  LOGIN_HISTORY_SCHEMA,
+} from '../../../src/collectors/normalise.js';
 import { canonicalBytes } from '../../../src/chain/canonical.js';
 import { sha256Hex } from '../../../src/chain/hash.js';
 import { SPEC_VECTORS, ORG_ID } from '../../../src/testing/specVectors.js';
@@ -92,5 +97,31 @@ describe('AUDIT_TRAIL_FIELDS', () => {
   it('requests the CreatedBy join rather than a second query', () => {
     expect(AUDIT_TRAIL_FIELDS).toContain('CreatedBy.Username');
     expect(AUDIT_TRAIL_FIELDS).toContain('CreatedBy.Name');
+  });
+});
+
+describe('normaliseLoginHistoryRow', () => {
+  const FIELDS = ['Id', 'LoginTime', 'Status', 'CountryIso', 'LoginGeoId'];
+  const LH_CTX = { ...CTX, apiVersion: '67.0' };
+
+  it('keeps every requested field, writing null for a null value and for an absent key', () => {
+    // Invented values. LoginGeoId is deliberately missing from the row entirely.
+    const record = normaliseLoginHistoryRow(
+      { Id: '0Ya5j00000LhIs01AAA', LoginTime: '2026-08-14T02:11:09.000+0000', Status: null, CountryIso: null },
+      LH_CTX,
+      FIELDS,
+    );
+    expect(record.schema).toBe(LOGIN_HISTORY_SCHEMA);
+    expect(record.source).toBe('login-history');
+    expect(record.source_id).toBe('0Ya5j00000LhIs01AAA');
+    expect(record.occurred_at).toBe('2026-08-14T02:11:09.000Z');
+    expect(Object.keys(record.payload).sort()).toEqual([...FIELDS].sort());
+    expect(record.payload).toMatchObject({ Status: null, CountryIso: null, LoginGeoId: null });
+  });
+
+  it('refuses a row with no LoginTime', () => {
+    expect(() =>
+      normaliseLoginHistoryRow({ Id: '0Ya5j00000LhIs01AAA' }, LH_CTX, FIELDS),
+    ).toThrow(/LoginTime/);
   });
 });

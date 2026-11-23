@@ -93,7 +93,7 @@ describe('sf evidence status', () => {
                   source_id: `limits:${ORG_ID}:${created.slice(0, 13)}`,
                   occurred_at: `${created.slice(0, 13)}:00:00.000Z`,
                   collected_at: created,
-                  api_version: '64.0',
+                  api_version: '67.0',
                   payload: { sampled_at: created, limits: {} },
                 } as never,
               ]
@@ -303,15 +303,18 @@ describe('sf evidence status', () => {
   });
 
   it('lists an archived source with no registered collector as not assessed, and exits 4', async () => {
+    // Every SourceId has a collector since login-history was registered, so this stands in
+    // for a source an older or newer release archived that this one has no collector for.
+    const unregistered = 'retired-source' as SourceId;
     await archive(
       { source: 'audit-trail', achieved: [{ from: RETENTION_START, to: NOW }] },
-      { source: 'login-history', achieved: [{ from: RETENTION_START, to: '2026-03-03T17:00:00.000Z' }] },
+      { source: unregistered, achieved: [{ from: RETENTION_START, to: '2026-03-03T17:00:00.000Z' }] },
     );
 
     const result = await status();
 
-    const login = result.sources.find((s) => s.source === 'login-history')!;
-    expect(login).toMatchObject({
+    const entry = result.sources.find((s) => s.source === unregistered)!;
+    expect(entry).toMatchObject({
       kind: null,
       gaps: null,
       pending: null,
@@ -324,7 +327,7 @@ describe('sf evidence status', () => {
       stale: null,
     });
     expect(out()).toMatch(/not assessed: no collector for this source/);
-    // Exit 0 means "full coverage"; nothing established that for login-history.
+    // Exit 0 means "full coverage"; nothing established that for this source.
     expect(process.exitCode).toBe(EXIT.DEGRADED);
   });
 

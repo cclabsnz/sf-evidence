@@ -27,7 +27,7 @@ function fakeSoql(impl: (soql: string) => Promise<unknown[]>): SoqlClient {
 
 const CTX = {
   orgId: ORG_ID,
-  apiVersion: '64.0',
+  apiVersion: '67.0',
   collectedAt: '2026-08-15T09:00:00.000Z',
 };
 

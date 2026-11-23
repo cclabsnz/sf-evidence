@@ -145,7 +145,10 @@ export interface CollectResult {
   clock: CollectionClockSource;
   /** Why the org clock could not be read; present only when the host said so. */
   clockNote?: string;
-  /** True when any source is not `complete`, or any sink write failed; drives exit code 4. */
+  /**
+   * True when any source is not `complete` or carries a degradation, or any sink write failed;
+   * drives exit code 4.
+   */
   degraded: boolean;
 }
 
@@ -632,6 +635,9 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
     ...(args.clockNote === undefined ? {} : { clockNote: args.clockNote }),
     degraded:
       sourceResults.some((s) => s.status !== 'complete') ||
+      // A complete source can still carry a degradation that applies to the whole source,
+      // such as login-history dropping fields the org rejected: the run is not full fidelity.
+      sourceResults.some((s) => s.degradations.length > 0) ||
       // Both sink failure shapes count: a sink that took nothing, and a sink that took the
       // batch but could not finish anchoring it.
       sinkResults.some((s) => !s.written || s.error !== undefined),

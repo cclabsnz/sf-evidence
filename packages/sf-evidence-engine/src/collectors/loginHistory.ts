@@ -142,7 +142,7 @@ export class LoginHistoryCollector implements EventCollector {
           detail: err.message,
           fieldsDropped: dropped,
           remediation:
-            `The org rejected these LoginHistory fields although API v${ctx.apiVersion} should ` +
+            'The org rejected these LoginHistory fields although API v67.0 should ' +
             'expose them; records from this run omit them. Check the org\'s API version and ' +
             'field visibility for the running user.',
         };

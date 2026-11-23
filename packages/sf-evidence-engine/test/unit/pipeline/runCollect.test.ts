@@ -10,6 +10,7 @@ import { buildBatch, manifestHash } from '../../../src/chain/manifestBuilder.js'
 import { GENESIS_PREV } from '../../../src/types/manifest.js';
 import { mergeWindows } from '../../../src/lib/windows.js';
 import type { SoqlClient } from '@cclabsnz/sf-core';
+import { sfApiError } from '../../fixtures/httpApiError.js';
 import type { Sink } from '../../../src/types/sink.js';
 
 function fakeSoql(impl: (soql: string) => Promise<unknown[]>): SoqlClient {
@@ -989,6 +990,44 @@ describe('runCollect in 7-day rounds', () => {
     expect(summaries.find((s) => s.source === 'login-history')?.coverage ?? []).toEqual([]);
     expect(summaries.find((s) => s.source === 'audit-trail')!.coverage).toEqual([
       { from: '2026-07-26T09:00:00.000Z', to: NOW.toISOString() },
+    ]);
+  });
+
+  it('records a LoginHistory denied with the real jsforce error shape as degraded, and still commits audit-trail', async () => {
+    const soql = fakeSoql(async (q) => {
+      if (q.includes('FROM LoginHistory')) {
+        throw sfApiError('INSUFFICIENT_ACCESS', 'Insufficient privileges to access LoginHistory');
+      }
+      return [ROW];
+    });
+    const result = await runCollect(
+      args({ soql, sources: ['audit-trail' as const, 'login-history' as const] }),
+    );
+
+    expect(result.manifests.length).toBeGreaterThan(0);
+    for (const m of result.manifests) {
+      const manifest = (await sink.readManifest(ORG_ID, m.seq))!;
+      const entry = manifest.sources.find((s) => s.source === 'login-history');
+      if (entry) {
+        expect(entry.status).toBe('degraded');
+        expect(entry.achieved).toEqual([]);
+      }
+    }
+    const audit = result.sources.find((s) => s.source === 'audit-trail')!;
+    const login = result.sources.find((s) => s.source === 'login-history')!;
+    expect(audit.status).toBe('complete');
+    expect(audit.recordsWritten).toBe(1);
+    expect(login.status).toBe('degraded');
+    expect(login.degradations[0]).toMatchObject({ code: 'INSUFFICIENT_ACCESS' });
+    expect(login.degradations[0]!.remediation).toContain('MonitorLoginHistory');
+    // The exit-4 path: collect exits DEGRADED exactly when result.degraded is true.
+    expect(result.degraded).toBe(true);
+    expect((await sink.head(ORG_ID))!.seq).toBe(result.manifest.seq);
+
+    const summaries = await new ArchiveReader(sink).summarise(ORG_ID, { persist: false });
+    expect(summaries.find((s) => s.source === 'login-history')?.coverage ?? []).toEqual([]);
+    expect(summaries.find((s) => s.source === 'audit-trail')!.coverage).toEqual([
+      { from: SINCE20, to: NOW.toISOString() },
     ]);
   });
 

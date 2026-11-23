@@ -1,5 +1,5 @@
-import { isApiError } from '@cclabsnz/sf-core';
 import { EXIT, type ExitCode } from './exit.js';
+import { PERMISSION_ERROR_CODES, salesforceErrorCode } from './errors.js';
 import type { Sink } from '../types/sink.js';
 
 /**
@@ -256,8 +256,6 @@ async function clockCheck(env: DoctorEnv): Promise<Check> {
   }
 }
 
-const LOGIN_HISTORY_ACCESS_CODES = new Set(['INSUFFICIENT_ACCESS', 'INSUFFICIENT_ACCESS_OR_READONLY', 'INVALID_TYPE']);
-
 async function loginHistoryCheck(env: DoctorEnv): Promise<Check> {
   const name = 'Login History access';
   if (!env.probeLoginHistory) {
@@ -267,11 +265,12 @@ async function loginHistoryCheck(env: DoctorEnv): Promise<Check> {
     await env.probeLoginHistory();
     return { name, level: 'ok', detail: 'the running user can read LoginHistory', checked: true };
   } catch (err) {
-    if (isApiError(err) && LOGIN_HISTORY_ACCESS_CODES.has(err.errorCode)) {
+    const code = salesforceErrorCode(err);
+    if (code !== undefined && PERMISSION_ERROR_CODES.has(code)) {
       return {
         name,
         level: 'warn',
-        detail: `the running user cannot read LoginHistory (${err.errorCode}); the "Monitor Login History" permission (API name MonitorLoginHistory) is missing`,
+        detail: `the running user cannot read LoginHistory (${code}); the "Monitor Login History" permission (API name MonitorLoginHistory) is missing`,
         remediation:
           'Assign the SF Evidence Reader permission set (it includes MonitorLoginHistory), or collect without login-history using --source audit-trail,limits.',
         checked: true,

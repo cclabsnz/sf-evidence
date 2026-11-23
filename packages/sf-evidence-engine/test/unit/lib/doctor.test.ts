@@ -1,5 +1,6 @@
 import { jest } from '@jest/globals';
 import { EXIT } from '../../../src/lib/exit.js';
+import { sfApiError } from '../../fixtures/httpApiError.js';
 import {
   doctorExitCode,
   formatChecks,
@@ -237,6 +238,17 @@ describe('doctor', () => {
         expect(`${c.detail} ${c.remediation ?? ''}`).toContain('Monitor Login History');
         expect(`${c.detail} ${c.remediation ?? ''}`).toContain('MonitorLoginHistory');
         expect(doctorExitCode(checks)).toBe(EXIT.DEGRADED);
+      },
+    );
+
+    it.each(['INSUFFICIENT_ACCESS', 'INSUFFICIENT_ACCESS_OR_READONLY', 'INVALID_TYPE'])(
+      'names the permission on a real-shape %s (no statusCode)',
+      async (code) => {
+        const checks = await runChecks(env({ probeLoginHistory: async () => Promise.reject(sfApiError(code)) }));
+        const c = find(checks, 'login history');
+        expect(c.level).toBe('warn');
+        expect(c.detail).toContain(`(${code})`);
+        expect(c.detail).toContain('MonitorLoginHistory');
       },
     );
 

@@ -8,6 +8,7 @@ import { LimitsCollector } from '../../../src/collectors/limits.js';
 import { API_VERSION } from '../../../src/salesforce.js';
 import { ORG_ID } from '../../../src/testing/specVectors.js';
 import type { SoqlClient } from '@cclabsnz/sf-core';
+import { sfApiError } from '../../fixtures/httpApiError.js';
 
 const VERSIONED = ['ForwardedForIp', 'AuthMethodReference', 'AuthContextClassRef'];
 
@@ -264,5 +265,38 @@ describe('LoginHistoryCollector', () => {
     expect(qs[0]!.permission).toContain('Monitor Login History');
     expect(qs[0]!.soql).toContain('LoginTime >= <from> AND LoginTime < <to>');
     expect(qs[0]!.soql).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+});
+
+describe('LoginHistoryCollector with the error shape jsforce actually throws', () => {
+  it('records a real-shape INSUFFICIENT_ACCESS as degraded, naming MonitorLoginHistory', async () => {
+    const soql = fakeSoql(async () => {
+      throw sfApiError('INSUFFICIENT_ACCESS', 'Insufficient privileges to access LoginHistory');
+    });
+    const out = await new LoginHistoryCollector().collect({ ...CTX, soql }, { window: ONE_SLICE });
+
+    expect(out.status).toBe('degraded');
+    expect(out.achieved).toEqual([]);
+    expect(out.records).toEqual([]);
+    expect(out.degradations).toHaveLength(1);
+    expect(out.degradations[0]).toMatchObject({ source: 'login-history', code: 'INSUFFICIENT_ACCESS', window: ONE_SLICE });
+    expect(out.degradations[0]!.remediation).toContain('MonitorLoginHistory');
+  });
+
+  it('downgrades the versioned fields on a real-shape INVALID_FIELD', async () => {
+    const widths: number[] = [];
+    const soql = fakeSoql(async (q) => {
+      widths.push(selected(q).length);
+      if (selected(q).includes('AuthContextClassRef')) {
+        throw sfApiError('INVALID_FIELD', "No such column 'AuthContextClassRef' on entity 'LoginHistory'.");
+      }
+      return [row(1)];
+    });
+    const out = await new LoginHistoryCollector().collect({ ...CTX, soql }, { window: ONE_SLICE });
+
+    expect(widths).toEqual([25, 22]);
+    expect(out.status).toBe('complete');
+    expect(out.degradations).toHaveLength(1);
+    expect(out.degradations[0]).toMatchObject({ code: 'INVALID_FIELD', fieldsDropped: VERSIONED });
   });
 });

@@ -1,4 +1,3 @@
-import { isApiError } from '@cclabsnz/sf-core';
 import type { Degradation } from '../types/manifest.js';
 import type { SourceId } from '../types/record.js';
 
@@ -31,6 +30,31 @@ const REMEDIATION: Record<string, (permission: string) => string> = {
 };
 
 /**
+ * The codes that mean the running user cannot read a source at all: a missing permission, or
+ * an object the org does not expose to them. Retrying another window will not help.
+ */
+export const PERMISSION_ERROR_CODES: ReadonlySet<string> = new Set([
+  'INSUFFICIENT_ACCESS',
+  'INSUFFICIENT_ACCESS_OR_READONLY',
+  'INVALID_TYPE',
+]);
+
+/**
+ * The Salesforce error code an API failure carries, or undefined when `err` is not one.
+ *
+ * Deliberately not sf-core's `isApiError`, which also requires a numeric `statusCode`. The
+ * error a real query rejects with is jsforce's `HttpApiError`, which has `errorCode` (and
+ * `name`, `data`) but no `statusCode`, and neither @salesforce/core nor sf-core's
+ * SoqlClientImpl adds one. Requiring it meant no real permission, timeout or field error was
+ * ever recognised: each one failed the run instead of being recorded as a degradation.
+ */
+export function salesforceErrorCode(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const code = (err as { errorCode?: unknown }).errorCode;
+  return typeof code === 'string' && code.length > 0 ? code : undefined;
+}
+
+/**
  * Map an error to a coverage degradation, or null if it is not one (C6).
  *
  * Returning null matters as much as returning a value: an unrecognised failure must
@@ -38,14 +62,15 @@ const REMEDIATION: Record<string, (permission: string) => string> = {
  * would be a gap dressed up as a known limitation.
  */
 export function classifyDegradation(err: unknown, source: SourceId): Degradation | null {
-  if (!isApiError(err)) return null;
-  const remediationFor = REMEDIATION[err.errorCode];
+  const code = salesforceErrorCode(err);
+  if (code === undefined) return null;
+  const remediationFor = REMEDIATION[code];
   if (!remediationFor) return null;
 
   return {
     source,
-    code: err.errorCode,
-    detail: err.message,
+    code,
+    detail: err instanceof Error ? err.message : String((err as { message?: unknown }).message ?? code),
     remediation: remediationFor(PERMISSION[source]),
   };
 }

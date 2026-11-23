@@ -1,5 +1,6 @@
 import { collectSliced } from '../../../src/collectors/slicing.js';
 import { mergeWindows } from '../../../src/lib/windows.js';
+import { sfApiError } from '../../fixtures/httpApiError.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -113,5 +114,23 @@ describe('collectSliced', () => {
       throw timeout();
     }, { ...OPTS, floorMs: 2 * HOUR });
     expect(result.degradations.map((d) => len(d.window!))).toEqual([2 * HOUR, 2 * HOUR]);
+  });
+});
+
+describe('collectSliced with the error shape jsforce actually throws', () => {
+  it('halves a slice on a real-shape QUERY_TIMEOUT (no statusCode)', async () => {
+    const window = { from: '2026-06-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' };
+    const asked: number[] = [];
+    const fetch = async (slice: { from: string; to: string }) => {
+      asked.push(len(slice));
+      if (len(slice) > 10 * DAY) throw sfApiError('QUERY_TIMEOUT', 'Your query request was running for too long.');
+      return [slice.from];
+    };
+    const result = await collectSliced(window, fetch, OPTS);
+
+    expect(asked[0]).toBe(30 * DAY);
+    expect(asked).toContain(15 * DAY);
+    expect(result.degradations).toEqual([]);
+    expect(result.achieved).toEqual([window]);
   });
 });

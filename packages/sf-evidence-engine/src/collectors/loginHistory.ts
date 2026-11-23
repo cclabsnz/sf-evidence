@@ -1,6 +1,6 @@
-import { isApiError } from '@cclabsnz/sf-core';
 import { normaliseLoginHistoryRow, type LoginHistoryRow } from './normalise.js';
 import { collectSliced } from './slicing.js';
+import { salesforceErrorCode } from '../lib/errors.js';
 import { toSoqlDateTime } from '../lib/time.js';
 import { API_VERSION } from '../salesforce.js';
 import type { Degradation, TimeWindow } from '../types/manifest.js';
@@ -160,11 +160,11 @@ export class LoginHistoryCollector implements EventCollector {
         // versioned fields, so it falls through to collectSliced as an ordinary slice
         // degradation. The error message is not parsed for the field name.
         const dropped = fields.filter((f) => VERSIONED_NAMES.has(f));
-        if (downgrade || !isApiError(err) || err.errorCode !== 'INVALID_FIELD' || dropped.length === 0) {
+        if (downgrade || salesforceErrorCode(err) !== 'INVALID_FIELD' || dropped.length === 0) {
           throw err;
         }
         fields = fields.filter((f) => !VERSIONED_NAMES.has(f));
-        downgrade = downgradeOf(this.source, dropped, err.message);
+        downgrade = downgradeOf(this.source, dropped, err instanceof Error ? err.message : 'INVALID_FIELD');
         return await query(slice);
       }
     };

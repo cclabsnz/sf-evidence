@@ -1,4 +1,4 @@
-import { classifyDegradation } from '../lib/errors.js';
+import { classifyDegradation, salesforceErrorCode } from '../lib/errors.js';
 import { toIsoMs } from '../lib/time.js';
 import { mergeWindows } from '../lib/windows.js';
 import type { Degradation, TimeWindow } from '../types/manifest.js';
@@ -35,11 +35,7 @@ export function monthSlices(window: TimeWindow): TimeWindow[] {
 }
 
 function isQueryTimeout(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as { errorCode?: unknown }).errorCode === 'QUERY_TIMEOUT'
-  );
+  return salesforceErrorCode(err) === 'QUERY_TIMEOUT';
 }
 
 /**

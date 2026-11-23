@@ -87,6 +87,20 @@ interface FetchedRow {
   fields: readonly string[];
 }
 
+/** The windowless degradation a field downgrade records; it never touches status. */
+function downgradeOf(source: SourceId, dropped: string[], detail: string): Degradation {
+  return {
+    source,
+    code: 'INVALID_FIELD',
+    detail,
+    fieldsDropped: dropped,
+    remediation:
+      'The org rejected these LoginHistory fields although API v67.0 should ' +
+      'expose them; records from this run omit them. Check the org\'s API version and ' +
+      'field visibility for the running user.',
+  };
+}
+
 export class LoginHistoryCollector implements EventCollector {
   public readonly source: SourceId = 'login-history';
   public readonly kind = 'event' as const;
@@ -118,6 +132,20 @@ export class LoginHistoryCollector implements EventCollector {
     let fields: readonly string[] = loginHistoryFields(ctx.apiVersion);
     let downgrade: Degradation | undefined;
 
+    // A downgrade an earlier call of this run already made. Every later window and round
+    // starts without those fields, so the rejected query is issued once per run, not once per
+    // call; the degradation is repeated so each manifest records what its records lack.
+    const omit = new Set(opts.omitFields ?? []);
+    const omitted = fields.filter((f) => VERSIONED_NAMES.has(f) && omit.has(f));
+    if (omitted.length > 0) {
+      fields = fields.filter((f) => !omitted.includes(f));
+      downgrade = downgradeOf(
+        this.source,
+        omitted,
+        `${omitted.join(', ')} were dropped earlier in this run, when the org rejected them, and were not queried again.`,
+      );
+    }
+
     const query = async (slice: TimeWindow): Promise<FetchedRow[]> => {
       const used = fields;
       const rows = await ctx.soql.queryAll<LoginHistoryRow>(soqlFor(used, slice));
@@ -136,16 +164,7 @@ export class LoginHistoryCollector implements EventCollector {
           throw err;
         }
         fields = fields.filter((f) => !VERSIONED_NAMES.has(f));
-        downgrade = {
-          source: this.source,
-          code: 'INVALID_FIELD',
-          detail: err.message,
-          fieldsDropped: dropped,
-          remediation:
-            'The org rejected these LoginHistory fields although API v67.0 should ' +
-            'expose them; records from this run omit them. Check the org\'s API version and ' +
-            'field visibility for the running user.',
-        };
+        downgrade = downgradeOf(this.source, dropped, err.message);
         return await query(slice);
       }
     };

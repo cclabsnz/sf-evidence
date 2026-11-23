@@ -217,6 +217,21 @@ describe('collect command', () => {
     expect(logged.join('\n')).toMatch(/queried {2}.*\n\s+covered {2}/);
   });
 
+  it('names the range of manifests a run committed in several rounds, and returns them all', async () => {
+    const result = await run({ source: 'login-history', since: 'P20D' });
+    expect(result.manifests).toHaveLength(3);
+    expect(result.manifest).toEqual(result.manifests[2]);
+    const out = logged.join('\n');
+    expect(out).toContain(`manifests #1–#3 (3)  ${result.manifest.hash}`);
+    expect(out).not.toMatch(/manifest seq/);
+  });
+
+  it('prints a one-round run as one manifest, as before', async () => {
+    const result = await run({ source: 'login-history', since: 'P1D' });
+    expect(result.manifests).toHaveLength(1);
+    expect(logged.join('\n')).toContain(`manifest seq 1  ${result.manifest.hash}`);
+  });
+
   it('says covered nothing for a refused source, rather than leaving the queried window to imply coverage', async () => {
     const result = await run({ 'api-floor': 1_000_000 }, fakeOrg(90_000));
     expect(result.sources[0]!.achieved).toEqual([]);

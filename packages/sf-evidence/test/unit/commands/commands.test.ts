@@ -414,6 +414,7 @@ describe('sf evidence commands', () => {
         dryRun: false,
         sources: [],
         manifest: { seq: 1, hash: 'sha256:x', prev: GENESIS_PREV },
+        manifests: [{ seq: 1, hash: 'sha256:x', prev: GENESIS_PREV }],
         sinks: [{ id: 'local', written: true }],
         orphansFound: [{ relPath: orphan, bytes: 10 }],
         metadata: { written: [], prepared: [] },
@@ -430,6 +431,7 @@ describe('sf evidence commands', () => {
         dryRun: false,
         sources: [],
         manifest: { seq: 1, hash: 'sha256:x', prev: GENESIS_PREV },
+        manifests: [{ seq: 1, hash: 'sha256:x', prev: GENESIS_PREV }],
         sinks: [
           {
             id: 'git',
@@ -452,6 +454,7 @@ describe('sf evidence commands', () => {
         dryRun: false,
         sources: [],
         manifest: { seq: 1, hash: 'sha256:x', prev: GENESIS_PREV },
+        manifests: [{ seq: 1, hash: 'sha256:x', prev: GENESIS_PREV }],
         sinks: [
           { id: 'local', written: true },
           { id: 'git', written: false, error: 'disk full' },
@@ -490,6 +493,7 @@ describe('sf evidence commands', () => {
           },
         ],
         manifest: { seq: 1, hash: 'sha256:x', prev: GENESIS_PREV },
+        manifests: [{ seq: 1, hash: 'sha256:x', prev: GENESIS_PREV }],
         sinks: [],
         orphansFound: [],
         metadata: { written: [], prepared: [] },
@@ -525,6 +529,7 @@ describe('sf evidence commands', () => {
           },
         ],
         manifest: { seq: 1, hash: 'sha256:x', prev: GENESIS_PREV },
+        manifests: [{ seq: 1, hash: 'sha256:x', prev: GENESIS_PREV }],
         sinks: [],
         orphansFound: [],
         metadata: { written: [], prepared: [] },

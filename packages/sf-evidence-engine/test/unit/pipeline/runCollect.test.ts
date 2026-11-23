@@ -3,11 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ArchiveReader } from '../../../src/archive/reader.js';
 import { LocalSink } from '../../../src/sinks/local.js';
-import { planWindows, runCollect } from '../../../src/pipeline/runCollect.js';
+import { planRounds, planWindows, ROUND_MS, runCollect } from '../../../src/pipeline/runCollect.js';
+import { verifyChain } from '../../../src/chain/verifier.js';
 import { ORG_ID } from '../../../src/testing/specVectors.js';
-import { buildBatch } from '../../../src/chain/manifestBuilder.js';
+import { buildBatch, manifestHash } from '../../../src/chain/manifestBuilder.js';
 import { GENESIS_PREV } from '../../../src/types/manifest.js';
+import { mergeWindows } from '../../../src/lib/windows.js';
 import type { SoqlClient } from '@cclabsnz/sf-core';
+import type { Sink } from '../../../src/types/sink.js';
 
 function fakeSoql(impl: (soql: string) => Promise<unknown[]>): SoqlClient {
   return {
@@ -53,15 +56,18 @@ describe('runCollect', () => {
 
   it('writes a genesis manifest on the first run', async () => {
     const result = await runCollect(base());
-    expect(result.manifest.seq).toBe(1);
-    expect(result.manifest.prev).toBe(`sha256:${'0'.repeat(64)}`);
+    // A 180-day first run is committed in 7-day rounds: 26 manifests, the first at genesis.
+    expect(result.manifests).toHaveLength(26);
+    expect(result.manifests[0]!.seq).toBe(1);
+    expect(result.manifests[0]!.prev).toBe(`sha256:${'0'.repeat(64)}`);
+    expect(result.manifest).toEqual(result.manifests[25]);
     expect(result.degraded).toBe(false);
   });
 
   it('links the second run to the first', async () => {
     const first = await runCollect(base());
     const second = await runCollect(base());
-    expect(second.manifest.seq).toBe(2);
+    expect(second.manifest.seq).toBe(first.manifest.seq + 1);
     expect(second.manifest.prev).toBe(first.manifest.hash);
   });
 
@@ -78,10 +84,10 @@ describe('runCollect', () => {
   it('still writes a manifest on a zero-record run', async () => {
     // A run that happened and found nothing is evidence too; its absence would look
     // identical to a run that never happened.
-    await runCollect(base());
+    const first = await runCollect(base());
     const second = await runCollect(base());
-    expect(second.manifest.seq).toBe(2);
-    await expect(sink.readManifest(ORG_ID, 2)).resolves.not.toBeNull();
+    expect(second.manifest.seq).toBe(first.manifest.seq + 1);
+    await expect(sink.readManifest(ORG_ID, second.manifest.seq)).resolves.not.toBeNull();
   });
 
   it('backfills the full 180-day window on the first run', async () => {
@@ -161,10 +167,9 @@ describe('runCollect', () => {
   });
 
   it('puts every failed slice of a source into the manifest degradations', async () => {
-    let call = 0;
-    const soql = fakeSoql(async () => {
-      call += 1;
-      if (call === 2 || call === 4) {
+    // Two month slices fail. They fall in different 7-day rounds, so in different manifests.
+    const soql = fakeSoql(async (q) => {
+      if (q.includes('CreatedDate >= 2026-02-01T00:00:00Z') || q.includes('CreatedDate >= 2026-04-01T00:00:00Z')) {
         throw Object.assign(new Error('timeout'), {
           errorCode: 'REQUEST_LIMIT_EXCEEDED',
           statusCode: 400,
@@ -181,13 +186,16 @@ describe('runCollect', () => {
     });
 
     expect(result.sources[0]!.degradations).toHaveLength(2);
-    const manifest = await sink.readManifest(ORG_ID, 1);
-    expect(manifest!.degradations).toHaveLength(2);
-    expect(manifest!.degradations.map((d) => d.window?.from)).toEqual([
+    const manifests = await Promise.all(result.manifests.map((m) => sink.readManifest(ORG_ID, m.seq)));
+    const recorded = manifests.flatMap((m) => m!.degradations);
+    expect(recorded).toHaveLength(2);
+    expect(recorded.map((d) => d.window?.from)).toEqual([
       '2026-02-01T00:00:00.000Z',
       '2026-04-01T00:00:00.000Z',
     ]);
-    expect(manifest!.sources[0]!.achieved).toHaveLength(3);
+    expect(manifests.filter((m) => m!.degradations.length > 0)).toHaveLength(2);
+    expect(result.sources[0]!.status).toBe('partial');
+    expect(result.sources[0]!.achieved).toHaveLength(3);
   });
 
   it('finds and reports orphan record files, and does not adopt them', async () => {
@@ -204,7 +212,7 @@ describe('runCollect', () => {
 
     expect(result.orphansFound.map((o) => o.relPath)).toEqual([orphan]);
     // "Found", not "adopted": the orphan's record is in no manifest and so in no chain.
-    const manifest = (await sink.readManifest(ORG_ID, 2))!;
+    const manifest = (await sink.readManifest(ORG_ID, result.manifest.seq))!;
     const paths = manifest.sources.flatMap((s) => s.files.map((f) => f.path));
     expect(paths).not.toContain(orphan);
   });
@@ -236,7 +244,9 @@ describe('runCollect', () => {
     const result = await runCollect({ ...base(), sinks: [sink, failing] });
 
     expect(result.sinks[0]).toMatchObject({ id: 'local', written: true });
-    expect(result.sinks[1]).toMatchObject({ id: 'git', written: false, error: 'disk full' });
+    // It failed the first of the backfill's 26 rounds, and was given none of the rest.
+    expect(result.sinks[1]).toMatchObject({ id: 'git', written: false, error: 'round 1 of 26 (seq 1): disk full' });
+    expect(result.manifests).toHaveLength(26);
     // The local sink kept the batch, so it is on disk and verifiable.
     await expect(sink.readManifest(ORG_ID, 1)).resolves.not.toBeNull();
     // But the run is not reported as clean: one canonical sink's chain did not advance.
@@ -344,22 +354,33 @@ describe('runCollect', () => {
       }),
     });
 
-    expect(seen).toHaveLength(2);
+    // The gap is cut at the 7-day round boundary from its start (23 February), then the
+    // incremental window comes in a round of its own; the empty rounds between are dropped.
+    expect(seen).toHaveLength(3);
     expect(seen[0]).toContain('CreatedDate >= 2026-02-16T10:00:00Z');
-    expect(seen[0]).toContain('CreatedDate < 2026-03-01T00:00:00Z');
-    expect(seen[1]).toContain('CreatedDate >= 2026-08-15T08:45:00Z');
+    expect(seen[0]).toContain('CreatedDate < 2026-02-23T10:00:00Z');
+    expect(seen[1]).toContain('CreatedDate < 2026-03-01T00:00:00Z');
+    expect(seen[2]).toContain('CreatedDate >= 2026-08-15T08:45:00Z');
 
-    const entry = (await sink.readManifest(ORG_ID, 2))!.sources[0]!;
-    expect(entry.status).toBe('complete');
-    expect(entry.window).toEqual({ from: '2026-02-16T10:00:00.000Z', to: '2026-08-15T10:00:00.000Z' });
-    // Complete, but the run did not query March to August: `achieved` must say so, or
-    // `achievedOf` would read the whole spanning window as covered by this run.
-    expect(entry.achieved).toEqual([
+    expect(second.manifests).toHaveLength(3);
+    const entries = await Promise.all(
+      second.manifests.map(async (m) => (await sink.readManifest(ORG_ID, m.seq))!.sources[0]!),
+    );
+    for (const e of entries) expect(e.status).toBe('complete');
+    expect(entries.map((e) => e.window)).toEqual([
+      { from: '2026-02-16T10:00:00.000Z', to: '2026-02-23T10:00:00.000Z' },
+      { from: '2026-02-23T10:00:00.000Z', to: '2026-03-01T00:00:00.000Z' },
+      { from: '2026-08-15T08:45:00.000Z', to: '2026-08-15T10:00:00.000Z' },
+    ]);
+    // The run did not query March to August: the result's spanning window must not be read as
+    // coverage, and `achieved` says exactly what was.
+    expect(second.sources[0]!.status).toBe('complete');
+    expect(second.sources[0]!.window).toEqual({ from: '2026-02-16T10:00:00.000Z', to: '2026-08-15T10:00:00.000Z' });
+    expect(second.sources[0]!.achieved).toEqual([
       { from: '2026-02-16T10:00:00.000Z', to: '2026-03-01T00:00:00.000Z' },
       { from: '2026-08-15T08:45:00.000Z', to: '2026-08-15T10:00:00.000Z' },
     ]);
-    expect(second.sources[0]!.window).toEqual(entry.window);
-    expect(second.sources[0]!.queried).toEqual(entry.achieved);
+    expect(second.sources[0]!.queried).toEqual(second.sources[0]!.achieved);
   });
 
   it('reports achieved separately from queried: a partial source covered less than it queried', async () => {
@@ -380,12 +401,15 @@ describe('runCollect', () => {
       }),
     });
     const s = result.sources[0]!;
-    const entry = (await sink.readManifest(ORG_ID, 1))!.sources[0]!;
+    const entries = await Promise.all(
+      result.manifests.map(async (m) => (await sink.readManifest(ORG_ID, m.seq))!.sources[0]!),
+    );
     expect(s.status).toBe('partial');
     expect(s.queried).toEqual([{ from: '2026-06-01T00:00:00.000Z', to: '2026-08-15T09:00:00.000Z' }]);
     expect(s.achieved.length).toBeGreaterThan(0);
     expect(s.achieved).not.toEqual(s.queried);
-    expect(s.achieved).toEqual(entry.achieved);
+    // What the manifests record as covered, round by round, merged.
+    expect(s.achieved).toEqual(mergeWindows(entries.flatMap((e) => e.achieved ?? [e.window])));
   });
 
   it('keeps a single-window complete entry byte-identical, with no achieved field', async () => {
@@ -401,7 +425,8 @@ describe('runCollect', () => {
       await readFile(join(root, `org_id=${ORG_ID}`, '_state', 'coverage.json'), 'utf8'),
     );
     expect(cache.version).toBe(3);
-    expect(cache.seq).toBe(1);
+    // Refreshed after the last of the backfill's 26 rounds.
+    expect(cache.seq).toBe(26);
     expect(cache.summaries[0].coverage).toEqual([
       { from: '2026-02-16T09:00:00.000Z', to: '2026-08-15T09:00:00.000Z' },
     ]);
@@ -476,7 +501,8 @@ describe('runCollect', () => {
         return [];
       }),
     });
-    expect(seen).toHaveLength(2);
+    // The gap, cut at its 7-day round boundary, then the incremental window.
+    expect(seen).toHaveLength(3);
     expect(seen[0]).toContain('CreatedDate >= 2026-02-16T10:00:00Z');
   });
 });
@@ -671,5 +697,370 @@ describe('runCollect with a snapshot source', () => {
     expect(result.sources[0]!.status).toBe('failed');
     expect(result.sources[0]!.degradations[0]!.code).toBe('NO_REST_CLIENT');
     expect((await sink.readManifest(ORG_ID, 1))!.sources[0]!.achieved).toEqual([]);
+  });
+});
+
+describe('planRounds', () => {
+  const at = (iso: string) => Date.parse(iso);
+  const len = (w: { from: string; to: string }) => at(w.to) - at(w.from);
+  const TO = '2026-08-15T09:00:00.000Z';
+  const FROM20 = '2026-07-26T09:00:00.000Z';
+
+  it('splits a 20-day event window into 3 contiguous rounds of at most 7 days', () => {
+    const rounds = planRounds([{ source: 'login-history', kind: 'event', windows: [{ from: FROM20, to: TO }] }]);
+    expect(ROUND_MS).toBe(7 * 86_400_000);
+    expect(rounds).toHaveLength(3);
+    const pieces = rounds.flatMap((r) => r.flatMap((e) => e.windows));
+    expect(pieces[0]!.from).toBe(FROM20);
+    expect(pieces.at(-1)!.to).toBe(TO);
+    for (let i = 1; i < pieces.length; i += 1) expect(pieces[i]!.from).toBe(pieces[i - 1]!.to);
+    for (const p of pieces) expect(len(p)).toBeLessThanOrEqual(ROUND_MS);
+    expect(pieces.map((p) => p.from)).toEqual([FROM20, '2026-08-02T09:00:00.000Z', '2026-08-09T09:00:00.000Z']);
+  });
+
+  it('puts a short window ending at the same instant only in the last round, and snapshots last', () => {
+    const rounds = planRounds([
+      { source: 'limits', kind: 'snapshot', windows: [{ from: '2026-08-15T09:00:00.000Z', to: '2026-08-15T10:00:00.000Z' }] },
+      { source: 'login-history', kind: 'event', windows: [{ from: FROM20, to: TO }] },
+      { source: 'audit-trail', kind: 'event', windows: [{ from: '2026-08-14T09:00:00.000Z', to: TO }] },
+    ]);
+    expect(rounds).toHaveLength(3);
+    expect(rounds[0]!.map((e) => e.source)).toEqual(['login-history']);
+    expect(rounds[1]!.map((e) => e.source)).toEqual(['login-history']);
+    expect(rounds[2]!.map((e) => e.source).sort()).toEqual(['audit-trail', 'limits', 'login-history']);
+    expect(rounds[2]!.find((e) => e.source === 'audit-trail')!.windows).toEqual([
+      { from: '2026-08-14T09:00:00.000Z', to: TO },
+    ]);
+  });
+
+  it('makes one round holding the snapshot sources when there are no event windows', () => {
+    const hour = { from: '2026-08-15T09:00:00.000Z', to: '2026-08-15T10:00:00.000Z' };
+    expect(planRounds([{ source: 'limits', kind: 'snapshot', windows: [hour] }])).toEqual([
+      [{ source: 'limits', windows: [hour] }],
+    ]);
+  });
+
+  it('drops rounds with no pieces between two far-apart windows', () => {
+    const rounds = planRounds([
+      {
+        source: 'audit-trail',
+        kind: 'event',
+        windows: [
+          { from: '2026-02-16T10:00:00.000Z', to: '2026-02-18T00:00:00.000Z' },
+          { from: '2026-08-15T08:45:00.000Z', to: '2026-08-15T10:00:00.000Z' },
+        ],
+      },
+    ]);
+    expect(rounds).toHaveLength(2);
+  });
+});
+
+describe('runCollect in 7-day rounds', () => {
+  let root: string;
+  let sink: LocalSink;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'sf-evidence-rounds-'));
+    sink = new LocalSink(root);
+    await sink.init();
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const NOW = new Date('2026-08-15T09:00:00.000Z');
+  const SINCE20 = '2026-07-26T09:00:00.000Z';
+  const ROUND2 = '2026-08-02T09:00:00Z';
+
+  const apiErr = (errorCode: string, message = 'boom') =>
+    Object.assign(new Error(message), { errorCode, statusCode: 400, name: 'ApiError' });
+
+  /** Invented values only. */
+  const loginRow = (id: string, loginTime: string): Record<string, unknown> => ({
+    Id: id,
+    UserId: '0055j00000AaBbCcAAG',
+    LoginTime: loginTime,
+    LoginType: 'Application',
+    LoginSubType: null,
+    Status: 'Success',
+    Application: 'Browser',
+    Browser: 'Firefox 140',
+    Platform: 'Linux',
+    SourceIp: '203.0.113.10',
+    CountryIso: 'NZ',
+    LoginGeoId: null,
+    LoginUrl: 'acme.my.salesforce.com',
+    NetworkId: null,
+    ApiType: null,
+    ApiVersion: null,
+    ClientVersion: null,
+    AuthenticationServiceId: null,
+    CipherSuite: null,
+    TlsProtocol: 'TLS 1.3',
+    OptionsIsGet: false,
+    OptionsIsPost: true,
+    ForwardedForIp: null,
+    AuthMethodReference: null,
+    AuthContextClassRef: null,
+  });
+
+  /** The `from` of a SOQL query's window, as the query spells it. */
+  const fromOf = (q: string) => /(?:LoginTime|CreatedDate) >= (\S+)/.exec(q)?.[1];
+
+  const args = (over: Record<string, unknown> = {}) => ({
+    orgId: ORG_ID,
+    sources: ['login-history' as const],
+    sinks: [sink] as Sink[],
+    soql: fakeSoql(async () => []),
+    now: NOW,
+    since: SINCE20,
+    ...over,
+  });
+
+  /** A sink that delegates to `inner`, logging and optionally failing putBatch. */
+  const wrap = (inner: LocalSink, log: string[], failOn?: (seq: number) => boolean, id = inner.id): Sink => {
+    const proxy = Object.create(inner) as Sink & { id: string };
+    Object.defineProperty(proxy, 'id', { value: id });
+    proxy.putBatch = async (batch) => {
+      log.push(`put ${batch.manifest.seq}`);
+      if (failOn?.(batch.manifest.seq)) throw new Error('disk full');
+      return inner.putBatch(batch);
+    };
+    return proxy;
+  };
+
+  it('writes one manifest per round on a 20-day backfill, chained from genesis', async () => {
+    const result = await runCollect(args());
+    expect(result.manifests).toHaveLength(3);
+    expect(result.manifests.map((m) => m.seq)).toEqual([1, 2, 3]);
+    expect(result.manifests[0]!.prev).toBe(GENESIS_PREV);
+    expect(result.manifests[1]!.prev).toBe(result.manifests[0]!.hash);
+    expect(result.manifests[2]!.prev).toBe(result.manifests[1]!.hash);
+    expect(result.manifest).toEqual(result.manifests[2]);
+    for (const m of result.manifests) {
+      expect(manifestHash((await sink.readManifest(ORG_ID, m.seq))!)).toBe(m.hash);
+    }
+    expect((await sink.head(ORG_ID))!.seq).toBe(3);
+  });
+
+  it('writes a round before it collects the next one', async () => {
+    const log: string[] = [];
+    const soql = fakeSoql(async (q) => {
+      log.push(`query ${fromOf(q)}`);
+      return [];
+    });
+    await runCollect(args({ soql, sinks: [wrap(sink, log)] }));
+    expect(log.indexOf('put 1')).toBeGreaterThan(-1);
+    expect(log.indexOf(`query ${ROUND2}`)).toBeGreaterThan(log.indexOf('put 1'));
+    expect(log.indexOf('put 2')).toBeGreaterThan(log.indexOf(`query ${ROUND2}`));
+  });
+
+  it('writes exactly one manifest on a 1-day incremental run', async () => {
+    const first = await runCollect(args({ since: undefined }));
+    expect(first.manifests).toHaveLength(26);
+    const result = await runCollect(args({ since: undefined, now: new Date('2026-08-16T09:00:00.000Z') }));
+    expect(result.manifests).toHaveLength(1);
+    expect(result.manifest.seq).toBe(27);
+  });
+
+  it('spreads a 180-day login-history backfill over 26 rounds, with audit-trail only in the last', async () => {
+    // The archive already covers audit-trail to an hour ago, and has no login-history.
+    const anHourAgo = '2026-08-15T08:00:00.000Z';
+    await sink.putBatch(
+      buildBatch({
+        orgId: ORG_ID,
+        runId: '01K3QF8H2N0000000000000001',
+        createdAt: anHourAgo,
+        collectedAt: anHourAgo,
+        prevManifestHash: GENESIS_PREV,
+        seq: 1,
+        outcomes: [
+          {
+            source: 'audit-trail',
+            status: 'complete',
+            window: { from: '2026-02-16T08:00:00.000Z', to: anHourAgo },
+            achieved: [{ from: '2026-02-16T08:00:00.000Z', to: anHourAgo }],
+            records: [],
+          },
+        ],
+        degradations: [],
+      }),
+    );
+
+    const result = await runCollect(
+      args({ since: undefined, sources: ['audit-trail' as const, 'login-history' as const] }),
+    );
+
+    expect(result.manifests).toHaveLength(26);
+    expect(result.manifests[0]!.seq).toBe(2);
+    const manifests = await Promise.all(result.manifests.map((m) => sink.readManifest(ORG_ID, m.seq)));
+    manifests.slice(0, -1).forEach((m) => expect(m!.sources.map((s) => s.source)).toEqual(['login-history']));
+    expect(manifests.at(-1)!.sources.map((s) => s.source)).toEqual(['audit-trail', 'login-history']);
+    const login = manifests.map((m) => m!.sources.find((s) => s.source === 'login-history')!.window);
+    expect(login[0]!.from).toBe('2026-02-16T09:00:00.000Z');
+    expect(login.at(-1)!.to).toBe(NOW.toISOString());
+    for (let i = 1; i < login.length; i += 1) expect(login[i]!.from).toBe(login[i - 1]!.to);
+  });
+
+  it('keeps the rounds it committed when the canonical sink fails partway, and resumes after them', async () => {
+    const log: string[] = [];
+    const err = await runCollect(
+      args({ since: undefined, sinks: [wrap(sink, log, (seq) => seq === 3)] }),
+    ).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/No canonical sink completed this run/);
+    expect((await sink.head(ORG_ID))!.seq).toBe(2);
+    expect(log).toEqual(['put 1', 'put 2', 'put 3']);
+
+    const round2 = (await sink.readManifest(ORG_ID, 2))!.sources[0]!.window;
+    const seen: string[] = [];
+    const resumed = await runCollect(
+      args({
+        since: undefined,
+        soql: fakeSoql(async (q) => {
+          seen.push(q);
+          return [];
+        }),
+      }),
+    );
+    const overlap = new Date(Date.parse(round2.to) - 15 * 60_000).toISOString();
+    expect(resumed.sources[0]!.queried).toEqual([{ from: overlap, to: NOW.toISOString() }]);
+    expect(resumed.manifests[0]!.seq).toBe(3);
+    expect(resumed.manifests[0]!.prev).toBe(manifestHash((await sink.readManifest(ORG_ID, 2))!));
+  });
+
+  it('writes an id returned in two adjacent rounds once', async () => {
+    const soql = fakeSoql(async (q) => {
+      const from = fromOf(q);
+      if (from === '2026-08-01T00:00:00Z' || from === ROUND2) {
+        return [loginRow('0Ya5j00000LhIsDUPAAA', '2026-08-02T09:00:00.000+0000')];
+      }
+      return [];
+    });
+    const result = await runCollect(args({ soql }));
+    expect(result.sources[0]!.recordsFetched).toBe(2);
+    expect(result.sources[0]!.recordsWritten).toBe(1);
+    expect(result.sources[0]!.recordsDeduped).toBe(1);
+  });
+
+  it('dry-runs a 20-day backfill as 3 chained manifests and writes nothing', async () => {
+    const log: string[] = [];
+    const result = await runCollect(args({ dryRun: true, sinks: [wrap(sink, log)] }));
+    expect(log).toEqual([]);
+    expect(result.manifests.map((m) => m.seq)).toEqual([1, 2, 3]);
+    expect(result.manifests[0]!.prev).toBe(GENESIS_PREV);
+    expect(result.manifests[1]!.prev).toBe(result.manifests[0]!.hash);
+    expect(result.manifests[2]!.prev).toBe(result.manifests[1]!.hash);
+    await expect(sink.head(ORG_ID)).resolves.toBeNull();
+  });
+
+  it('records an unreadable LoginHistory as degraded in every round, never as covered', async () => {
+    const soql = fakeSoql(async (q) => {
+      if (q.includes('FROM LoginHistory')) throw apiErr('INSUFFICIENT_ACCESS', 'no access');
+      return [ROW];
+    });
+    const result = await runCollect(
+      args({ soql, sources: ['audit-trail' as const, 'login-history' as const] }),
+    );
+
+    expect(result.manifests).toHaveLength(3);
+    for (const m of result.manifests) {
+      const manifest = (await sink.readManifest(ORG_ID, m.seq))!;
+      expect(manifest.sources.find((s) => s.source === 'login-history')!.status).toBe('degraded');
+    }
+    const audit = result.sources.find((s) => s.source === 'audit-trail')!;
+    const login = result.sources.find((s) => s.source === 'login-history')!;
+    expect(audit.recordsWritten).toBe(1);
+    expect(login.status).toBe('degraded');
+    expect(result.degraded).toBe(true);
+
+    const summaries = await new ArchiveReader(sink).summarise(ORG_ID, { persist: false });
+    expect(summaries.find((s) => s.source === 'login-history')?.coverage ?? []).toEqual([]);
+    expect(summaries.find((s) => s.source === 'audit-trail')!.coverage).toEqual([
+      { from: '2026-07-26T09:00:00.000Z', to: NOW.toISOString() },
+    ]);
+  });
+
+  it('issues the rejected versioned-field query once per run and records the downgrade in every round', async () => {
+    const widths: number[] = [];
+    const soql = fakeSoql(async (q) => {
+      const width = q.slice('SELECT '.length, q.indexOf(' FROM ')).split(', ').length;
+      widths.push(width);
+      if (width === 25) throw apiErr('INVALID_FIELD', "No such column 'AuthContextClassRef'");
+      return [];
+    });
+    const result = await runCollect(args({ soql }));
+
+    expect(widths.filter((w) => w === 25)).toHaveLength(1);
+    expect(widths.filter((w) => w === 22).length).toBeGreaterThan(1);
+    expect(result.manifests).toHaveLength(3);
+    for (const m of result.manifests) {
+      const manifest = (await sink.readManifest(ORG_ID, m.seq))!;
+      const d = manifest.degradations.find((x) => x.code === 'INVALID_FIELD');
+      expect(d?.fieldsDropped).toEqual(['ForwardedForIp', 'AuthMethodReference', 'AuthContextClassRef']);
+    }
+    expect(result.sources[0]!.status).toBe('complete');
+  });
+
+  it('reports partial for a source whose rounds were partial, degraded and complete', async () => {
+    const soql = fakeSoql(async (q) => {
+      const from = fromOf(q);
+      // Round 1's second slice (August), and round 2's only slice.
+      if (from === '2026-08-01T00:00:00Z' || from === ROUND2) throw apiErr('INSUFFICIENT_ACCESS');
+      return [];
+    });
+    const result = await runCollect(args({ soql }));
+    const statuses = await Promise.all(
+      result.manifests.map(async (m) => (await sink.readManifest(ORG_ID, m.seq))!.sources[0]!.status),
+    );
+    expect(statuses).toEqual(['partial', 'degraded', 'complete']);
+    expect(result.sources[0]!.status).toBe('partial');
+  });
+
+  it('gives each round its own record file, so two rounds in one month both verify', async () => {
+    let n = 0;
+    const soql = fakeSoql(async (q) => {
+      const from = fromOf(q)!;
+      n += 1;
+      // One row inside each queried window, so rounds 2 and 3 both write August.
+      const at = new Date(Date.parse(from.replace('Z', '.000Z')) + 60_000).toISOString();
+      return [loginRow(`0Ya5j00000LhIs${String(n).padStart(2, '0')}AAA`, at.replace('Z', '+0000'))];
+    });
+    const result = await runCollect(args({ soql }));
+
+    const files = result.sources[0]!.files;
+    expect(new Set(files).size).toBe(files.length);
+    expect(files.filter((f) => f.includes('month=08')).length).toBeGreaterThanOrEqual(3);
+    // Round 1's file name is unchanged; later rounds carry a suffix.
+    const first = (await sink.readManifest(ORG_ID, 1))!.sources[0]!.files.map((f) => f.path);
+    for (const f of first) expect(f).not.toMatch(/-r\d\d\.ndjson$/);
+    const third = (await sink.readManifest(ORG_ID, 3))!.sources[0]!.files.map((f) => f.path);
+    for (const f of third) expect(f).toMatch(/-r03\.ndjson$/);
+
+    const report = await verifyChain(sink, ORG_ID, { anchor: 'none', deep: true });
+    expect(report.breaks).toEqual([]);
+    expect(report.chain.state).toBe('verified');
+    expect(report.manifestsChecked).toBe(3);
+  });
+
+  it('drops a sink that failed a round from the later rounds, and reports it not written', async () => {
+    const root2 = await mkdtemp(join(tmpdir(), 'sf-evidence-rounds2-'));
+    try {
+      const other = new LocalSink(root2);
+      await other.init();
+      const log: string[] = [];
+      const result = await runCollect(
+        args({ sinks: [sink, wrap(other, log, (seq) => seq === 2, 'git')] }),
+      );
+
+      expect(log).toEqual(['put 1', 'put 2']);
+      expect((await other.head(ORG_ID))!.seq).toBe(1);
+      expect((await sink.head(ORG_ID))!.seq).toBe(3);
+      expect(result.sinks[0]).toMatchObject({ id: 'local', written: true });
+      expect(result.sinks[1]!.written).toBe(false);
+      expect(result.sinks[1]!.error).toMatch(/round 2 of 3 \(seq 2\): disk full/);
+      expect(result.degraded).toBe(true);
+    } finally {
+      await rm(root2, { recursive: true, force: true });
+    }
   });
 });

@@ -183,6 +183,51 @@ describe('LoginHistoryCollector', () => {
     }
   });
 
+  it('starts with omitFields already dropped: never issues the failing query, still records the downgrade', async () => {
+    const seen: string[] = [];
+    const soql = fakeSoql(async (q) => {
+      seen.push(q);
+      return [row(seen.length)];
+    });
+    const outcome = await new LoginHistoryCollector().collect(
+      { ...CTX, soql },
+      { window: THREE_SLICES, omitFields: VERSIONED },
+    );
+
+    expect(seen).toHaveLength(3);
+    for (const q of seen) expect(selected(q)).toEqual([...LOGIN_HISTORY_BASE_FIELDS]);
+    expect(outcome.status).toBe('complete');
+    expect(outcome.degradations).toHaveLength(1);
+    const d = outcome.degradations[0]!;
+    expect(d).toMatchObject({
+      source: 'login-history',
+      code: 'INVALID_FIELD',
+      fieldsDropped: VERSIONED,
+      remediation:
+        "The org rejected these LoginHistory fields although API v67.0 should expose them; records from this run omit them. Check the org's API version and field visibility for the running user.",
+    });
+    expect(d.detail).toMatch(/earlier in this run/);
+    expect(d.window).toBeUndefined();
+    for (const rec of outcome.records) expect(Object.keys(rec.payload)).toHaveLength(22);
+  });
+
+  it('keeps 25 fields on records fetched before a later slice triggers the downgrade', async () => {
+    const seen: string[] = [];
+    const soql = fakeSoql(async (q) => {
+      seen.push(q);
+      if (seen.length === 2) throw apiError('INVALID_FIELD', "No such column 'AuthContextClassRef'");
+      return [row(seen.length)];
+    });
+    const outcome = await new LoginHistoryCollector().collect({ ...CTX, soql }, { window: THREE_SLICES });
+
+    // June (25 fields), July attempt (25, rejected), July retry (22), August (22).
+    expect(seen.map((q) => selected(q).length)).toEqual([25, 25, 22, 22]);
+    const byId = new Map(outcome.records.map((r) => [r.source_id, Object.keys(r.payload).length]));
+    expect(byId.get(row(1).Id as string)).toBe(25);
+    expect(byId.get(row(3).Id as string)).toBe(22);
+    expect(byId.get(row(4).Id as string)).toBe(22);
+  });
+
   it('records a second INVALID_FIELD after the downgrade as an ordinary slice degradation', async () => {
     const soql = fakeSoql(async () => {
       throw apiError('INVALID_FIELD');

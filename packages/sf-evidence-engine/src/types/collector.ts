@@ -15,6 +15,12 @@ export interface CollectOptions {
   window: TimeWindow;
   /** Source ids already in the archive; excluded from the result (SPEC.md §10.1). */
   knownSourceIds?: ReadonlySet<string>;
+  /**
+   * Fields an earlier `collect` call of this run already had to drop (the `fieldsDropped` of
+   * its `INVALID_FIELD` degradation). The collector leaves them out from the start instead of
+   * issuing a query the org already rejected, and records the downgrade again.
+   */
+  omitFields?: readonly string[];
 }
 
 export interface CollectionOutcome {

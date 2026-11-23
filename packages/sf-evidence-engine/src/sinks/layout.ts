@@ -86,7 +86,16 @@ export interface RecordPathArgs {
   /** Determines the filename. */
   collectedAt: string;
   runId: string;
+  /**
+   * Distinguishes the record files of one run's later commit rounds (`r02`, `r03`, ...). Every
+   * round shares `collectedAt` and the run id, so without it a second round writing the same
+   * month would replace the first round's file under a manifest that already hashed it.
+   * Absent for the first round, which keeps a one-round run's file names unchanged.
+   */
+  part?: string;
 }
+
+const PART_RE = /^[A-Za-z0-9]+$/;
 
 /** Compact `YYYYMMDDThhmmssZ` for filenames. */
 function stamp(iso: string): string {
@@ -95,7 +104,11 @@ function stamp(iso: string): string {
 
 export function recordFilePath(args: RecordPathArgs): string {
   const { year, month } = monthKey(args.occurredAt);
-  const name = `part-${stamp(args.collectedAt)}-${args.runId.slice(0, 8)}.ndjson`;
+  if (args.part !== undefined && !PART_RE.test(args.part)) {
+    throw new Error(`Invalid record file part: ${args.part} (expected alphanumerics only).`);
+  }
+  const suffix = args.part === undefined ? '' : `-${args.part}`;
+  const name = `part-${stamp(args.collectedAt)}-${args.runId.slice(0, 8)}${suffix}.ndjson`;
   return `${orgPrefix(args.orgId)}/source=${args.source}/year=${year}/month=${month}/${name}`;
 }
 

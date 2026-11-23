@@ -27,6 +27,17 @@ const run = promisify(execFile);
  * (`verifyChain`) they wrap, because `collect` needs a live org connection to construct.
  * `status` reads only the archive, so the induced-gap test below runs the real command.
  */
+/** Sorted, with touching windows joined. */
+function mergeWindows(ws: Array<{ from: string; to: string }>): Array<{ from: string; to: string }> {
+  const out: Array<{ from: string; to: string }> = [];
+  for (const w of [...ws].sort((a, b) => (a.from < b.from ? -1 : 1))) {
+    const last = out.at(-1);
+    if (last && w.from <= last.to) last.to = w.to > last.to ? w.to : last.to;
+    else out.push({ ...w });
+  }
+  return out;
+}
+
 function orgWith(rows: number): SoqlClient {
   const records = Array.from({ length: rows }, (_, i) => ({
     Id: `0Ym5j00000XyZ${String(i).padStart(2, '0')}CAA`,
@@ -65,15 +76,19 @@ describe('end to end: collect → verify → tamper → verify', () => {
   });
 
   it('collects, chains, commits and verifies clean across three runs', async () => {
+    let manifests = 0;
     for (let i = 0; i < 3; i += 1) {
-      await runCollect({
+      const result = await runCollect({
         orgId: ORG_ID,
         sources: ['audit-trail'],
         sinks: [sink],
         soql: orgWith(5),
         now: new Date(`2026-08-1${5 + i}T09:00:00.000Z`),
       });
+      manifests += result.manifests.length;
     }
+    // The first run's 180-day backfill is committed in 26 seven-day rounds; each later run is one.
+    expect(manifests).toBe(28);
 
     sink.anchorOrgId = ORG_ID;
     const report = await verifyChain(sink, ORG_ID, {
@@ -83,7 +98,7 @@ describe('end to end: collect → verify → tamper → verify', () => {
     });
 
     expect(report.chain.valid).toBe(true);
-    expect(report.manifestsChecked).toBe(3);
+    expect(report.manifestsChecked).toBe(manifests);
     expect(report.anchor.valid).toBe(true);
     // Second and third runs dedupe to zero new records; five records total.
     expect(report.recordsChecked).toBe(5);
@@ -142,9 +157,10 @@ describe('end to end: collect → verify → tamper → verify', () => {
     const report = await verifyChain(sink, ORG_ID, { anchor: 'none', deep: true });
     expect(report.chain.valid).toBe(true);
 
-    expect(report.coverage.degradedSources).toEqual([
-      { seq: 1, source: 'audit-trail', status: 'degraded' },
-    ]);
+    // Every 7-day round of the backfill was denied, and each manifest says so.
+    expect(report.coverage.degradedSources).toEqual(
+      result.manifests.map((m) => ({ seq: m.seq, source: 'audit-trail', status: 'degraded' })),
+    );
     expect(report.coverage.degradations[0]).toMatchObject({
       seq: 1,
       code: 'INSUFFICIENT_ACCESS',
@@ -196,7 +212,7 @@ describe('end to end: collect → verify → tamper → verify', () => {
   it('names the git anchor honestly for a local-only repository of unsigned commits', async () => {
     // This is the only configuration Phase 0 produces by default, and the statement used to
     // assert a force-push past branch protection that no host is watching.
-    await runCollect({
+    const collected = await runCollect({
       orgId: ORG_ID,
       sources: ['audit-trail'],
       sinks: [sink],
@@ -219,7 +235,8 @@ describe('end to end: collect → verify → tamper → verify', () => {
 
     const text = formatVerifyReport(report).join('\n');
     expect(text).toMatch(/remote:\s+NONE/);
-    expect(text).toContain('0 signed, 1 unsigned');
+    // One commit per manifest, and the backfill wrote one manifest per 7-day round.
+    expect(text).toContain(`0 signed, ${collected.manifests.length} unsigned`);
   });
 
   it('archives the batch and says so when only the git commit fails', async () => {
@@ -261,7 +278,7 @@ describe('end to end: collect → verify → tamper → verify', () => {
     const manifest = await sink.readManifest(ORG_ID, 1);
     expect(manifest).not.toBeNull();
     expect(manifest!.sources[0]!.record_count).toBe(3);
-    await expect(sink.head(ORG_ID)).resolves.toMatchObject({ seq: 1 });
+    await expect(sink.head(ORG_ID)).resolves.toMatchObject({ seq: result.manifest.seq });
 
     const report = await verifyChain(sink, ORG_ID, { anchor: 'none', deep: true });
     expect(report.chain.valid).toBe(true);
@@ -320,7 +337,8 @@ describe('end to end: collect → verify → tamper → verify', () => {
         query: async () => ({ totalSize: 0, done: true, records: [] }),
         queryAll: (async (soql: string) => {
           const from = /CreatedDate >= (\S+)/.exec(soql)![1]!;
-          if (denyJune && from === '2026-06-01T00:00:00Z') {
+          // Every slice inside June: rounds cut June at 7-day boundaries.
+          if (denyJune && from >= '2026-06-01T00:00:00Z' && from < '2026-07-01T00:00:00Z') {
             throw Object.assign(new Error('no access'), {
               errorCode: 'INSUFFICIENT_ACCESS',
               statusCode: 403,
@@ -384,9 +402,10 @@ describe('end to end: collect → verify → tamper → verify', () => {
         now: NOW,
       });
       expect(first.sources[0]!.status).toBe('partial');
-      expect(first.sources[0]!.degradations.map((d) => [d.code, d.window])).toEqual([
-        ['INSUFFICIENT_ACCESS', DENIED],
-      ]);
+      // One degradation per round that touched June; together they are exactly June.
+      const denied = first.sources[0]!.degradations;
+      expect(new Set(denied.map((d) => d.code))).toEqual(new Set(['INSUFFICIENT_ACCESS']));
+      expect(mergeWindows(denied.map((d) => d.window!))).toEqual([DENIED]);
 
       const before = await status();
       expect(before.result.sources[0]!.gaps).toEqual([{ ...DENIED, days: 30 }]);

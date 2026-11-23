@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      SF_EVIDENCE_VERSION: 0.1.0 # pin; upgrade deliberately
+      SF_EVIDENCE_VERSION: 0.3.0 # pin; upgrade deliberately
       SF_EVIDENCE_TARGET_ORG: evidence-org
       SF_EVIDENCE_ARCHIVE: .
       SF_EVIDENCE_SOURCES: audit-trail,login-history,limits

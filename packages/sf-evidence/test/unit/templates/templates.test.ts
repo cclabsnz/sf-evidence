@@ -35,4 +35,17 @@ describe('scheduling templates', () => {
       expect(xml.match(/<!--([\s\S]*?)-->/)![1]).toMatch(/Login History/);
     });
   });
+
+  describe('CI templates pin the plugin version this release ships', () => {
+    const pluginVersion = async (): Promise<string> =>
+      (JSON.parse(await readFile(resolve(repoRoot, 'packages/sf-evidence/package.json'), 'utf8')) as { version: string }).version;
+
+    it.each([
+      ['github-actions/sf-evidence.yml', /SF_EVIDENCE_VERSION:\s*(\S+)/],
+      ['azure-devops/azure-pipelines.yml', /name: SF_EVIDENCE_VERSION\s*\n\s*value:\s*(\S+)/],
+    ])('%s pins @cclabsnz/sf-evidence at the package version', async (file, pattern) => {
+      const pinned = (await read(file)).match(pattern)?.[1];
+      expect(pinned).toBe(await pluginVersion());
+    });
+  });
 });

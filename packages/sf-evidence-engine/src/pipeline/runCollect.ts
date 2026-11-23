@@ -719,12 +719,16 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
           // previous head and is reported as failed; it does not abort the run and discard a
           // batch the other sinks already accepted. The whole run only fails when no
           // canonical sink took a round, which is the case where it was archived nowhere.
+          const drop = (message: string): void => {
+            sr.dropped = true;
+            const earlier = sr.roundsWritten > 0 ? '; earlier rounds were written to this sink' : '';
+            sr.error = `${label}${message}${earlier}`;
+            failures.push(`${sr.sink.id}: ${sr.error}`);
+          };
           try {
             const out = await sr.sink.putBatch(batch);
             if (!out.written) {
-              sr.dropped = true;
-              sr.error = out.anchorError === undefined ? undefined : `${label}${out.anchorError}`;
-              if (sr.error) failures.push(`${sr.sink.id}: ${sr.error}`);
+              drop(out.anchorError ?? 'the sink reported the batch was not written');
               continue;
             }
             sr.roundsWritten += 1;
@@ -739,10 +743,7 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
             // everything it was asked to.
             if (out.anchorError !== undefined && sr.error === undefined) sr.error = `${label}${out.anchorError}`;
           } catch (err) {
-            sr.dropped = true;
-            const earlier = sr.roundsWritten > 0 ? '; earlier rounds were written to this sink' : '';
-            sr.error = `${label}${err instanceof Error ? err.message : String(err)}${earlier}`;
-            failures.push(`${sr.sink.id}: ${sr.error}`);
+            drop(err instanceof Error ? err.message : String(err));
           }
         }
 
@@ -798,13 +799,17 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
 
   const sinkResults: SinkResult[] = args.dryRun
     ? []
-    : sinkRuns.map((sr) => ({
-        id: sr.sink.id,
-        written: !sr.dropped && sr.roundsWritten === rounds.length,
-        commit: sr.commit,
-        pushPending: sr.pushPending,
-        error: sr.error,
-      }));
+    : sinkRuns.map((sr) => {
+        const written = !sr.dropped && sr.roundsWritten === rounds.length;
+        return {
+          id: sr.sink.id,
+          written,
+          // An earlier round's commit must not read as anchoring a run the sink did not take.
+          commit: written ? sr.commit : undefined,
+          pushPending: sr.pushPending,
+          error: sr.error,
+        };
+      });
 
   return {
     runId,

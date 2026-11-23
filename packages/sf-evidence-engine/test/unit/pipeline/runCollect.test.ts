@@ -940,6 +940,18 @@ describe('runCollect in 7-day rounds', () => {
     expect(result.sources[0]!.recordsFetched).toBe(2);
     expect(result.sources[0]!.recordsWritten).toBe(1);
     expect(result.sources[0]!.recordsDeduped).toBe(1);
+
+    // On a dry run nothing is on disk for round 2's knownSourceIds to find: only the ids this
+    // run carried across rounds can dedupe it.
+    const dryRoot = await mkdtemp(join(tmpdir(), 'sf-evidence-dry-'));
+    try {
+      const dry = await runCollect(args({ soql, dryRun: true, sinks: [new LocalSink(dryRoot)] }));
+      expect(dry.sources[0]!.recordsFetched).toBe(2);
+      expect(dry.sources[0]!.recordsWritten).toBe(1);
+      expect(dry.sources[0]!.recordsDeduped).toBe(1);
+    } finally {
+      await rm(dryRoot, { recursive: true, force: true });
+    }
   });
 
   it('dry-runs a 20-day backfill as 3 chained manifests and writes nothing', async () => {
@@ -1040,6 +1052,35 @@ describe('runCollect in 7-day rounds', () => {
     expect(report.breaks).toEqual([]);
     expect(report.chain.state).toBe('verified');
     expect(report.manifestsChecked).toBe(3);
+  });
+
+  it('treats a sink that returns written: false like one that threw, and reports no stale commit', async () => {
+    const root2 = await mkdtemp(join(tmpdir(), 'sf-evidence-rounds3-'));
+    try {
+      const other = new LocalSink(root2);
+      await other.init();
+      const log: string[] = [];
+      const quiet = Object.create(other) as Sink & { id: string };
+      Object.defineProperty(quiet, 'id', { value: 'git' });
+      quiet.putBatch = async (batch) => {
+        log.push(`put ${batch.manifest.seq}`);
+        if (batch.manifest.seq === 2) return { written: false, manifestSeq: 2, manifestHash: '' };
+        const out = await other.putBatch(batch);
+        return { ...out, commit: `c${batch.manifest.seq}` };
+      };
+      const result = await runCollect(args({ sinks: [sink, quiet] }));
+
+      expect(log).toEqual(['put 1', 'put 2']);
+      expect(result.sinks[1]!.written).toBe(false);
+      expect(result.sinks[1]!.error).toBe(
+        'round 2 of 3 (seq 2): the sink reported the batch was not written; earlier rounds were written to this sink',
+      );
+      // Round 1 was committed, but the sink did not take the run: no commit reads as its anchor.
+      expect(result.sinks[1]!.commit).toBeUndefined();
+      expect(result.degraded).toBe(true);
+    } finally {
+      await rm(root2, { recursive: true, force: true });
+    }
   });
 
   it('drops a sink that failed a round from the later rounds, and reports it not written', async () => {

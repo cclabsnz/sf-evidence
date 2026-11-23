@@ -1,4 +1,4 @@
-import { classifyDegradation, salesforceErrorCode } from '../lib/errors.js';
+import { classifyDegradation, PERMISSION_ERROR_CODES, salesforceErrorCode } from '../lib/errors.js';
 import { toIsoMs } from '../lib/time.js';
 import { mergeWindows } from '../lib/windows.js';
 import type { Degradation, TimeWindow } from '../types/manifest.js';
@@ -52,6 +52,10 @@ function isSplittable(err: unknown): boolean {
  * slice's rows are discarded: they are not the slice. Other recognised errors are
  * recorded against the slice without retry; unrecognised errors propagate.
  *
+ * A permission error (`PERMISSION_ERROR_CODES`) stops the fetch: no later slice is asked
+ * for, since another window will not grant the permission, and one degradation covers the
+ * denied slice to the end of the window.
+ *
  * `achieved` is built only from slices whose fetch returned.
  */
 export async function collectSliced<T>(
@@ -63,8 +67,10 @@ export async function collectSliced<T>(
   const rows: T[] = [];
   const succeeded: TimeWindow[] = [];
   const degradations: Degradation[] = [];
+  let denied = false;
 
   const run = async (slice: TimeWindow): Promise<void> => {
+    if (denied) return;
     try {
       // A loop, not push(...rows): spreading a large slice as call arguments overflows the stack.
       for (const row of await fetchSlice(slice)) rows.push(row);
@@ -74,6 +80,12 @@ export async function collectSliced<T>(
       const d = classifyDegradation(err, opts.source);
       // An unrecognised failure must not be recorded as reduced coverage.
       if (!d) throw err;
+
+      if (PERMISSION_ERROR_CODES.has(d.code)) {
+        denied = true;
+        degradations.push({ ...d, window: { from: slice.from, to: window.to } });
+        return;
+      }
 
       if (isSplittable(err)) {
         const from = Date.parse(slice.from);

@@ -157,7 +157,9 @@ describe('end to end: collect → verify → tamper → verify', () => {
     const report = await verifyChain(sink, ORG_ID, { anchor: 'none', deep: true });
     expect(report.chain.valid).toBe(true);
 
-    // Every 7-day round of the backfill was denied, and each manifest says so.
+    // The first query was denied, so the source stopped there: one manifest records the
+    // whole 180-day plan as degraded, rather than one per 7-day round.
+    expect(result.manifests).toHaveLength(1);
     expect(report.coverage.degradedSources).toEqual(
       result.manifests.map((m) => ({ seq: m.seq, source: 'audit-trail', status: 'degraded' })),
     );
@@ -330,7 +332,11 @@ describe('end to end: collect → verify → tamper → verify', () => {
     const NOW = new Date('2026-08-01T00:00:00.000Z');
     const DENIED = { from: '2026-06-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' };
 
-    /** One audit-trail row per queried slice, dated inside it; the June slice optionally denied. */
+    /**
+     * One audit-trail row per queried slice, dated inside it; June's slices optionally refused.
+     * The refusal is REQUEST_LIMIT_EXCEEDED, not a permission error: a permission error stops the
+     * source for the rest of the run, so the gap would run from June to the end of the plan.
+     */
     function orgDenying(denyJune: boolean): SoqlClient {
       let n = 0;
       return {
@@ -339,8 +345,8 @@ describe('end to end: collect → verify → tamper → verify', () => {
           const from = /CreatedDate >= (\S+)/.exec(soql)![1]!;
           // Every slice inside June: rounds cut June at 7-day boundaries.
           if (denyJune && from >= '2026-06-01T00:00:00Z' && from < '2026-07-01T00:00:00Z') {
-            throw Object.assign(new Error('no access'), {
-              errorCode: 'INSUFFICIENT_ACCESS',
+            throw Object.assign(new Error('TotalRequests Limit exceeded.'), {
+              errorCode: 'REQUEST_LIMIT_EXCEEDED',
               statusCode: 403,
               name: 'ApiError',
             });
@@ -404,7 +410,7 @@ describe('end to end: collect → verify → tamper → verify', () => {
       expect(first.sources[0]!.status).toBe('partial');
       // One degradation per round that touched June; together they are exactly June.
       const denied = first.sources[0]!.degradations;
-      expect(new Set(denied.map((d) => d.code))).toEqual(new Set(['INSUFFICIENT_ACCESS']));
+      expect(new Set(denied.map((d) => d.code))).toEqual(new Set(['REQUEST_LIMIT_EXCEEDED']));
       expect(mergeWindows(denied.map((d) => d.window!))).toEqual([DENIED]);
 
       const before = await status();
@@ -415,7 +421,7 @@ describe('end to end: collect → verify → tamper → verify', () => {
       expect(before.text.match(/GAP/g)).toHaveLength(1);
       expect(before.exit).toBe(EXIT.DEGRADED);
 
-      // The permission is granted. A default run re-collects every gap still inside retention (R2).
+      // The limit resets. A default run re-collects every gap still inside retention (R2).
       const second = await runCollect({
         orgId: ORG_ID,
         sources: ['audit-trail'],

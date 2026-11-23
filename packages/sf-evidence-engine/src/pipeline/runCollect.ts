@@ -2,6 +2,7 @@ import { ArchiveReader } from '../archive/reader.js';
 import { DAY_MS, retentionStart as retentionStartOf, uncoveredIntervals } from '../archive/coverage.js';
 import { sha256Hex } from '../chain/hash.js';
 import { mergeWindows } from '../lib/windows.js';
+import { PERMISSION_ERROR_CODES } from '../lib/errors.js';
 import { buildBatch, manifestHash, PRODUCER } from '../chain/manifestBuilder.js';
 import { ARCHIVE_JSON_PATH, buildMetadataFiles, orgJsonPath } from '../archive/metadata.js';
 import { assertValidFloor, checkApiBudget } from './apiBudget.js';
@@ -392,6 +393,13 @@ interface SourceRun {
   seen: Set<string>;
   /** Fields an earlier call had to drop; every later call starts without them. */
   omitFields?: string[];
+  /**
+   * Set when a permission error stopped this source: it is not collected again this run, and
+   * the entry that recorded the denial spans the rest of its plan.
+   */
+  denied?: boolean;
+  /** The windows passed to `collect`, in order: what was actually queried. */
+  queried: TimeWindow[];
   statuses: SourceStatus[];
   entryWindows: TimeWindow[];
   achieved: TimeWindow[];
@@ -476,6 +484,7 @@ async function planSourceRun(
     windows: plan.windows,
     refused: [],
     seen: new Set(),
+    queried: [],
     statuses: [],
     entryWindows: [],
     achieved: [],
@@ -550,6 +559,8 @@ async function collectRoundEntry(
   windows: TimeWindow[],
   isLastRound: boolean,
   collectedAt: string,
+  /** This source's windows in later rounds, which a permission error leaves unqueried. */
+  later: TimeWindow[],
 ): Promise<{ input: SourceBatchInput; degradations: Degradation[] }> {
   const { source } = run;
   if (run.refusedAll) {
@@ -564,7 +575,11 @@ async function collectRoundEntry(
   }
 
   const perWindow: CollectionOutcome[] = [];
-  for (const window of windows) {
+  let denial: Degradation | undefined;
+  /** Where the denial applies from: its slice, or (a snapshot's, which has none) its window. */
+  let deniedFrom: TimeWindow | undefined;
+  let unqueried: TimeWindow[] = [];
+  for (const [i, window] of windows.entries()) {
     // Dedupe reads only the month partitions this window touches, plus what earlier
     // windows and rounds of this run already collected.
     const known = await reader.knownSourceIds(args.orgId, source, window);
@@ -579,19 +594,48 @@ async function collectRoundEntry(
       (d) => d.code === 'INVALID_FIELD' && d.fieldsDropped && d.fieldsDropped.length > 0,
     )?.fieldsDropped;
     if (dropped) run.omitFields = dropped;
+    run.queried.push(window);
     perWindow.push(windowOutcome);
+    // A missing permission will not be granted by another window: stop this source here.
+    denial = windowOutcome.degradations.find((d) => PERMISSION_ERROR_CODES.has(d.code));
+    if (denial) {
+      deniedFrom = denial.window ?? window;
+      unqueried = [...windows.slice(i + 1), ...later];
+      break;
+    }
   }
-  const combined = combineOutcomes(perWindow);
+  let combined = combineOutcomes(perWindow);
+  if (denial) run.denied = true;
+  // With nothing left after it, the denial already says everything; otherwise it is widened.
+  if (denial && deniedFrom && unqueried.length > 0) {
+    // One entry, here, for the rest of the plan: its window spans every window this run will
+    // not query, `achieved` stays what was actually collected, and the one denial degradation
+    // covers from the denied slice to the end of the plan.
+    const to = [deniedFrom.to, ...unqueried.map((w) => w.to)].reduce((a, b) => (b > a ? b : a));
+    const stopped: Degradation = {
+      ...denial,
+      window: { from: deniedFrom.from, to },
+      detail:
+        `${denial.detail} Collection of ${source} stopped for the rest of this run: ` +
+        `nothing from ${deniedFrom.from} to ${to} was queried after this error.`,
+    };
+    combined = {
+      ...combined,
+      window: spanning([...windows, ...unqueried]),
+      degradations: combined.degradations.map((d) => (d === denial ? stopped : d)),
+    };
+  }
   // A refused repair leaves part of the plan uncollected: the source's last round is never
-  // `complete`, and its window spans the refused windows, so they sit outside `achieved`.
-  const refused = isLastRound ? run.refused : [];
+  // `complete`, and its window spans the refused windows, so they sit outside `achieved`. A
+  // denied source has no later round, so its refused windows are recorded with the denial.
+  const refused = isLastRound || denial ? run.refused : [];
   const outcome: CollectionOutcome =
     refused.length === 0
       ? combined
       : {
           ...combined,
           status: combined.status === 'complete' ? 'partial' : combined.status,
-          window: spanning([...windows, ...refused.map((d) => d.window!)]),
+          window: spanning([combined.window, ...refused.map((d) => d.window!)]),
           degradations: [...refused, ...combined.degradations],
         };
   const degradations = withoutRepeatedDowngrade([], outcome.degradations);
@@ -674,11 +718,26 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
   let prev = head?.manifest_hash ?? GENESIS_PREV;
   let primaryWrote = false;
 
+  /** A source's windows in the rounds after round k. */
+  const laterWindows = (source: SourceId, k: number): TimeWindow[] =>
+    rounds.slice(k + 1).flatMap((r) => r.filter((e) => e.source === source).flatMap((e) => e.windows));
+  /** Whether a round after k still has a source to collect. */
+  const laterRoundLive = (k: number): boolean =>
+    rounds.slice(k + 1).some((r) => r.some((e) => !bySource.get(e.source)!.denied));
+  /** Denial entries held back from a round that had nothing else, for the next written round. */
+  let carried: { outcomes: SourceBatchInput[]; degradations: Degradation[] } | undefined;
+
   try {
     for (const [k, round] of rounds.entries()) {
-      const outcomes: SourceBatchInput[] = [];
-      const degradations: Degradation[] = [];
-      for (const entry of round) {
+      // A source a permission error stopped is not collected again: its denial entry already
+      // spans the rest of its plan. A round left with nothing to collect writes no manifest.
+      const live = round.filter((e) => !bySource.get(e.source)!.denied);
+      if (live.length === 0) continue;
+
+      const outcomes: SourceBatchInput[] = [...(carried?.outcomes ?? [])];
+      const degradations: Degradation[] = [...(carried?.degradations ?? [])];
+      let onlyDenials = true;
+      for (const entry of live) {
         const run = bySource.get(entry.source)!;
         const collected = await collectRoundEntry(
           args,
@@ -687,10 +746,25 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
           entry.windows,
           lastRound.get(entry.source) === k,
           collectedAt,
+          laterWindows(entry.source, k),
         );
         outcomes.push(collected.input);
         degradations.push(...collected.degradations);
+        if (!run.denied || collected.input.records.length > 0 || collected.input.achieved.length > 0) {
+          onlyDenials = false;
+        }
       }
+      // A round that collected nothing but a denial is not worth a manifest of its own while a
+      // later round will be written: its entry rides with that round instead. So an org that
+      // lacks a source's permission gets the manifests its other sources need, and the denial
+      // once, not a manifest per round of a plan the source will never collect.
+      if (onlyDenials && laterRoundLive(k)) {
+        carried = { outcomes, degradations };
+        continue;
+      }
+      carried = undefined;
+      outcomes.sort((a, b) => order.get(a.source)! - order.get(b.source)!);
+      const built = manifests.length;
 
       const batch = buildBatch({
         orgId: args.orgId,
@@ -702,7 +776,7 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
         outcomes,
         degradations,
         // Metadata describes the archive, not a round: it rides with the first one only.
-        ...(k === 0 ? { metadata: metadata.files } : { part: `r${String(k + 1).padStart(2, '0')}` }),
+        ...(built === 0 ? { metadata: metadata.files } : { part: `r${String(built + 1).padStart(2, '0')}` }),
       });
       for (const s of batch.manifest.sources) {
         bySource.get(s.source)!.files.push(...s.files.map((f) => f.path));
@@ -785,7 +859,8 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
     source: run.source,
     status: statusAcrossRounds(run.statuses),
     window: spanning(run.entryWindows),
-    queried: run.windows,
+    // A denied source stopped partway: only what it actually asked the org for.
+    queried: run.denied ? mergeWindows(run.queried) : run.windows,
     achieved: mergeWindows(run.achieved),
     ...(run.collector.kind === 'snapshot' && run.fetched > 0 ? { sampledAt: collectedAt } : {}),
     recordsFetched: run.fetched,
@@ -800,7 +875,9 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
   const sinkResults: SinkResult[] = args.dryRun
     ? []
     : sinkRuns.map((sr) => {
-        const written = !sr.dropped && sr.roundsWritten === rounds.length;
+        // Every manifest built, not every planned round: a round left with nothing to collect
+        // is not written.
+        const written = !sr.dropped && sr.roundsWritten === manifests.length;
         return {
           id: sr.sink.id,
           written,

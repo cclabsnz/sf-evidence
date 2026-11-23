@@ -966,24 +966,44 @@ describe('runCollect in 7-day rounds', () => {
     await expect(sink.head(ORG_ID)).resolves.toBeNull();
   });
 
-  it('records an unreadable LoginHistory as degraded in every round, never as covered', async () => {
+  it('records an unreadable LoginHistory once, as degraded over the whole plan, never as covered', async () => {
+    let loginQueries = 0;
     const soql = fakeSoql(async (q) => {
-      if (q.includes('FROM LoginHistory')) throw apiErr('INSUFFICIENT_ACCESS', 'no access');
+      if (q.includes('FROM LoginHistory')) {
+        loginQueries += 1;
+        throw apiErr('INSUFFICIENT_ACCESS', 'no access');
+      }
       return [ROW];
     });
     const result = await runCollect(
       args({ soql, sources: ['audit-trail' as const, 'login-history' as const] }),
     );
 
+    // audit-trail needs its 3 rounds; login-history is denied in the first and not queried again.
     expect(result.manifests).toHaveLength(3);
-    for (const m of result.manifests) {
-      const manifest = (await sink.readManifest(ORG_ID, m.seq))!;
-      expect(manifest.sources.find((s) => s.source === 'login-history')!.status).toBe('degraded');
-    }
+    expect(loginQueries).toBe(1);
+    const manifests = await Promise.all(result.manifests.map((m) => sink.readManifest(ORG_ID, m.seq)));
+    expect(manifests.map((m) => m!.sources.map((s) => s.source))).toEqual([
+      ['audit-trail', 'login-history'],
+      ['audit-trail'],
+      ['audit-trail'],
+    ]);
+    const entry = manifests[0]!.sources.find((s) => s.source === 'login-history')!;
+    expect(entry.status).toBe('degraded');
+    expect(entry.achieved).toEqual([]);
+    expect(entry.window).toEqual({ from: SINCE20, to: NOW.toISOString() });
+    const ds = manifests.flatMap((m) => m!.degradations.filter((d) => d.source === 'login-history'));
+    expect(ds).toHaveLength(1);
+    expect(ds[0]).toMatchObject({ code: 'INSUFFICIENT_ACCESS', window: { from: SINCE20, to: NOW.toISOString() } });
+
     const audit = result.sources.find((s) => s.source === 'audit-trail')!;
     const login = result.sources.find((s) => s.source === 'login-history')!;
     expect(audit.recordsWritten).toBe(1);
     expect(login.status).toBe('degraded');
+    expect(login.degradations).toHaveLength(1);
+    expect(login.window).toEqual({ from: SINCE20, to: NOW.toISOString() });
+    // Only the first round's piece was queried; the rest of the plan was not.
+    expect(login.queried).toEqual([{ from: SINCE20, to: ROUND2.replace('Z', '.000Z') }]);
     expect(result.degraded).toBe(true);
 
     const summaries = await new ArchiveReader(sink).summarise(ORG_ID, { persist: false });
@@ -991,6 +1011,107 @@ describe('runCollect in 7-day rounds', () => {
     expect(summaries.find((s) => s.source === 'audit-trail')!.coverage).toEqual([
       { from: '2026-07-26T09:00:00.000Z', to: NOW.toISOString() },
     ]);
+  });
+
+  it('writes only the manifests audit-trail needs when login-history is denied over a 180-day plan', async () => {
+    // The archive covers audit-trail to a day ago and has no login-history: login-history plans
+    // 180 days (26 rounds), audit-trail a 1-day incremental window in the last of them.
+    const aDayAgo = '2026-08-14T09:00:00.000Z';
+    await sink.putBatch(
+      buildBatch({
+        orgId: ORG_ID,
+        runId: '01K3QF8H2N0000000000000001',
+        createdAt: aDayAgo,
+        collectedAt: aDayAgo,
+        prevManifestHash: GENESIS_PREV,
+        seq: 1,
+        outcomes: [
+          {
+            source: 'audit-trail',
+            status: 'complete',
+            window: { from: '2026-02-15T09:00:00.000Z', to: aDayAgo },
+            achieved: [{ from: '2026-02-15T09:00:00.000Z', to: aDayAgo }],
+            records: [],
+          },
+        ],
+        degradations: [],
+      }),
+    );
+    let loginQueries = 0;
+    const soql = fakeSoql(async (q) => {
+      if (q.includes('FROM LoginHistory')) {
+        loginQueries += 1;
+        throw sfApiError('INSUFFICIENT_ACCESS', 'Insufficient privileges');
+      }
+      return [ROW];
+    });
+    const result = await runCollect(
+      args({ soql, since: undefined, sources: ['audit-trail' as const, 'login-history' as const] }),
+    );
+
+    expect(loginQueries).toBe(1);
+    expect(result.manifests).toHaveLength(1);
+    expect(result.manifests[0]!.seq).toBe(2);
+    const manifest = (await sink.readManifest(ORG_ID, 2))!;
+    expect(manifest.sources.map((s) => s.source)).toEqual(['audit-trail', 'login-history']);
+    const entry = manifest.sources.find((s) => s.source === 'login-history')!;
+    expect(entry).toMatchObject({ status: 'degraded', achieved: [] });
+    expect(entry.window).toEqual({ from: '2026-02-16T09:00:00.000Z', to: NOW.toISOString() });
+    const ds = manifest.degradations.filter((d) => d.source === 'login-history');
+    expect(ds).toHaveLength(1);
+    expect(ds[0]!.code).toBe('INSUFFICIENT_ACCESS');
+    expect(ds[0]!.window).toEqual({ from: '2026-02-16T09:00:00.000Z', to: NOW.toISOString() });
+
+    expect(result.sources.find((s) => s.source === 'audit-trail')!.status).toBe('complete');
+    const login = result.sources.find((s) => s.source === 'login-history')!;
+    expect(login.status).toBe('degraded');
+    expect(login.degradations).toHaveLength(1);
+    expect(result.degraded).toBe(true);
+    expect(result.sinks).toEqual([expect.objectContaining({ written: true })]);
+    expect((await sink.head(ORG_ID))!.seq).toBe(2);
+    const report = await verifyChain(sink, ORG_ID, { anchor: 'none', deep: true });
+    expect(report.breaks).toEqual([]);
+  });
+
+  it('writes one manifest for a login-history-only first run that is denied', async () => {
+    let loginQueries = 0;
+    const soql = fakeSoql(async () => {
+      loginQueries += 1;
+      throw sfApiError('INVALID_TYPE', "sObject type 'LoginHistory' is not supported.");
+    });
+    const result = await runCollect(args({ soql, since: undefined }));
+
+    expect(loginQueries).toBe(1);
+    expect(result.manifests).toHaveLength(1);
+    expect(result.manifests[0]!.prev).toBe(GENESIS_PREV);
+    const manifest = (await sink.readManifest(ORG_ID, 1))!;
+    expect(manifest.sources).toHaveLength(1);
+    expect(manifest.sources[0]).toMatchObject({ source: 'login-history', status: 'degraded', achieved: [] });
+    expect(manifest.sources[0]!.window).toEqual({ from: '2026-02-16T09:00:00.000Z', to: NOW.toISOString() });
+    expect(result.sources[0]!.status).toBe('degraded');
+    expect(result.sinks).toEqual([expect.objectContaining({ written: true })]);
+  });
+
+  it('keeps what earlier rounds collected when the permission goes partway through a run', async () => {
+    const seen: string[] = [];
+    const soql = fakeSoql(async (q) => {
+      const from = fromOf(q)!;
+      seen.push(from);
+      if (from >= ROUND2) throw sfApiError('INSUFFICIENT_ACCESS', 'Insufficient privileges');
+      return [];
+    });
+    const result = await runCollect(args({ soql }));
+
+    // Round 1 (two month slices) succeeded; round 2's only slice was denied; round 3 never ran.
+    expect(seen).toEqual(['2026-07-26T09:00:00Z', '2026-08-01T00:00:00Z', ROUND2]);
+    expect(result.manifests).toHaveLength(2);
+    const second = (await sink.readManifest(ORG_ID, result.manifests[1]!.seq))!;
+    expect(second.sources[0]).toMatchObject({ status: 'degraded', achieved: [] });
+    expect(second.sources[0]!.window).toEqual({ from: '2026-08-02T09:00:00.000Z', to: NOW.toISOString() });
+    expect(second.degradations).toHaveLength(1);
+    expect(second.degradations[0]!.window).toEqual({ from: '2026-08-02T09:00:00.000Z', to: NOW.toISOString() });
+    expect(result.sources[0]!.status).toBe('partial');
+    expect(result.sources[0]!.achieved).toEqual([{ from: SINCE20, to: '2026-08-02T09:00:00.000Z' }]);
   });
 
   it('records a LoginHistory denied with the real jsforce error shape as degraded, and still commits audit-trail', async () => {
@@ -1055,8 +1176,9 @@ describe('runCollect in 7-day rounds', () => {
   it('reports partial for a source whose rounds were partial, degraded and complete', async () => {
     const soql = fakeSoql(async (q) => {
       const from = fromOf(q);
-      // Round 1's second slice (August), and round 2's only slice.
-      if (from === '2026-08-01T00:00:00Z' || from === ROUND2) throw apiErr('INSUFFICIENT_ACCESS');
+      // Round 1's second slice (August), and round 2's only slice. Not a permission error,
+      // which would stop the source for the rest of the run.
+      if (from === '2026-08-01T00:00:00Z' || from === ROUND2) throw apiErr('REQUEST_LIMIT_EXCEEDED');
       return [];
     });
     const result = await runCollect(args({ soql }));

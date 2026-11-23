@@ -134,3 +134,40 @@ describe('collectSliced with the error shape jsforce actually throws', () => {
     expect(result.achieved).toEqual([window]);
   });
 });
+
+describe('collectSliced after a permission error', () => {
+  it.each(['INSUFFICIENT_ACCESS', 'INSUFFICIENT_ACCESS_OR_READONLY', 'INVALID_TYPE'])(
+    'stops on %s and records one degradation to the end of the window',
+    async (code) => {
+      const window = { from: '2026-05-15T00:00:00.000Z', to: '2026-08-15T00:00:00.000Z' };
+      const asked: string[] = [];
+      const fetch = async (slice: { from: string; to: string }) => {
+        asked.push(slice.from);
+        if (slice.from >= '2026-06-01') throw sfApiError(code);
+        return [slice.from];
+      };
+      const result = await collectSliced(window, fetch, { source: 'login-history' });
+
+      // May succeeded, June was denied, July and August were never asked for.
+      expect(asked).toEqual(['2026-05-15T00:00:00.000Z', '2026-06-01T00:00:00.000Z']);
+      expect(result.achieved).toEqual([{ from: window.from, to: '2026-06-01T00:00:00.000Z' }]);
+      expect(result.degradations).toHaveLength(1);
+      expect(result.degradations[0]).toMatchObject({ code, window: { from: '2026-06-01T00:00:00.000Z', to: window.to } });
+    },
+  );
+
+  it('keeps going after other recognised errors', async () => {
+    const window = { from: '2026-05-15T00:00:00.000Z', to: '2026-08-15T00:00:00.000Z' };
+    const asked: string[] = [];
+    const result = await collectSliced(
+      window,
+      async (slice) => {
+        asked.push(slice.from);
+        throw sfApiError('REQUEST_LIMIT_EXCEEDED');
+      },
+      OPTS,
+    );
+    expect(asked).toHaveLength(4);
+    expect(result.degradations).toHaveLength(4);
+  });
+});

@@ -251,7 +251,9 @@ describe('LoginHistoryCollector', () => {
 
     expect(outcome.status).toBe('degraded');
     expect(outcome.records).toEqual([]);
-    expect(outcome.degradations).toHaveLength(3);
+    // The first denial stops the fetch: one degradation, covering the whole window.
+    expect(outcome.degradations).toHaveLength(1);
+    expect(outcome.degradations[0]!.window).toEqual(THREE_SLICES);
     for (const d of outcome.degradations) {
       expect(d.source).toBe('login-history');
       expect(d.remediation).toContain('Monitor Login History');

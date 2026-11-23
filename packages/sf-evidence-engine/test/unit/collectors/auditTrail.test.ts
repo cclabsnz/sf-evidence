@@ -2,6 +2,7 @@ import { AuditTrailCollector } from '../../../src/collectors/auditTrail.js';
 import { mergeWindows } from '../../../src/lib/windows.js';
 import { ORG_ID } from '../../../src/testing/specVectors.js';
 import type { SoqlClient } from '@cclabsnz/sf-core';
+import { cappedOrg } from '../../fixtures/cappedOrg.js';
 
 function rows(n: number, monthOffset = 0) {
   return Array.from({ length: n }, (_, i) => ({
@@ -361,4 +362,55 @@ describe('AuditTrailCollector', () => {
     expect(outcome.records).toEqual([]);
     expect(calls).toBe(0);
   });
+});
+
+describe('AuditTrailCollector when a slice holds more rows than one query returns', () => {
+  const auditRow = (id: string, at: string) => ({
+    Id: id,
+    Action: 'PermSetAssign',
+    Section: 'Manage Users',
+    Display: 'change',
+    CreatedDate: at,
+    CreatedById: '0055j00000AaBbCcAAG',
+    DelegateUser: null,
+    CreatedByContext: null,
+    CreatedByIssuer: null,
+    CreatedBy: { Name: 'Jo Taylor', Username: 'jo.taylor@example.govt.nz' },
+  });
+  const JUNE = { from: '2026-06-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' };
+  const TWO_HOURS = { from: '2026-06-10T00:00:00.000Z', to: '2026-06-10T02:00:00.000Z' };
+
+  it.each([true, false])('halves a truncated slice until every row is fetched (counted client: %s)', async (counted) => {
+    // 720 rows in June, at most 200 per query: the month is truncated, so it must be split.
+    const org = cappedOrg({ cap: 200, counted, row: auditRow });
+    const out = await new AuditTrailCollector().collect({ ...CTX, soql: org.soql }, { window: JUNE });
+
+    expect(org.asked[0]).toBe(720);
+    expect(org.asked).toContain(360);
+    expect(out.degradations).toEqual([]);
+    expect(out.status).toBe('complete');
+    expect(out.achieved).toEqual([JUNE]);
+    expect(out.records).toHaveLength(720);
+    expect(new Set(out.records.map((r) => r.source_id)).size).toBe(720);
+  });
+
+  it.each([true, false])(
+    'records QUERY_TRUNCATED at the one-hour floor and never counts the slice as achieved (counted client: %s)',
+    async (counted) => {
+      // Three rows an hour, at most two per query: even a one-hour slice is cut short.
+      const org = cappedOrg({ cap: 2, perHour: 3, counted, row: auditRow });
+      const out = await new AuditTrailCollector().collect({ ...CTX, soql: org.soql }, { window: TWO_HOURS });
+
+      expect(out.status).toBe('degraded');
+      expect(out.achieved).toEqual([]);
+      // A truncated slice's rows are discarded, not written as if they were the slice.
+      expect(out.records).toEqual([]);
+      expect(out.degradations.map((d) => d.code)).toEqual(['QUERY_TRUNCATED', 'QUERY_TRUNCATED']);
+      expect(out.degradations.map((d) => d.window)).toEqual([
+        { from: '2026-06-10T00:00:00.000Z', to: '2026-06-10T01:00:00.000Z' },
+        { from: '2026-06-10T01:00:00.000Z', to: '2026-06-10T02:00:00.000Z' },
+      ]);
+      expect(out.degradations[0]!.remediation).toMatch(/more rows than one query could fetch/);
+    },
+  );
 });

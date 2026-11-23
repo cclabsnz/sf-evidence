@@ -1,5 +1,6 @@
 import { normaliseLoginHistoryRow, type LoginHistoryRow } from './normalise.js';
 import { collectSliced } from './slicing.js';
+import { queryAllComplete } from './fetch.js';
 import { salesforceErrorCode } from '../lib/errors.js';
 import { toSoqlDateTime } from '../lib/time.js';
 import { API_VERSION } from '../salesforce.js';
@@ -148,7 +149,7 @@ export class LoginHistoryCollector implements EventCollector {
 
     const query = async (slice: TimeWindow): Promise<FetchedRow[]> => {
       const used = fields;
-      const rows = await ctx.soql.queryAll<LoginHistoryRow>(soqlFor(used, slice));
+      const rows = await queryAllComplete<LoginHistoryRow>(ctx.soql, soqlFor(used, slice));
       return rows.map((row) => ({ row, fields: used }));
     };
 

@@ -105,6 +105,7 @@ export { resolveCollectBounds, resolveSince } from './lib/duration.js';
 export { COLLECTORS, getCollector } from './collectors/registry.js';
 export { API_VERSION, ORG_ID_QUERY, ORG_INFO_QUERY, resolveOrgId, resolveOrgInfo } from './salesforce.js';
 export { classifyDegradation } from './lib/errors.js';
+export type { CountedSoqlClient } from './collectors/fetch.js';
 export {
   buildExplanation,
   type Explanation,

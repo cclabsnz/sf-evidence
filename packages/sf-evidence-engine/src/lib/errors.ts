@@ -25,6 +25,9 @@ const REMEDIATION: Record<string, (permission: string) => string> = {
     'A requested field is not available at this API version. The affected time slice is not collected, and the source is marked partial (or degraded, if no slice succeeded) for the whole requested window — the manifest does not record which slice failed. Re-run against an org on a newer API version.',
   QUERY_TIMEOUT: () =>
     'The query exceeded the org query timeout for this time slice, and the slice could not be narrowed further (floor: one hour). The slice bounds are recorded in the manifest; re-run collect for that window when the org is less busy.',
+  QUERY_TRUNCATED: () =>
+    'The time slice returned more rows than one query could fetch, even narrowed to one hour, so it was not collected and is not counted as covered. ' +
+    'The slice bounds are recorded in the manifest; re-run collect for that window to collect it (if the sf config value maxQueryLimit is set, raise it first).',
   REQUEST_LIMIT_EXCEEDED: () =>
     'The org has exhausted its API request allocation. Re-run after the daily limit resets.',
 };

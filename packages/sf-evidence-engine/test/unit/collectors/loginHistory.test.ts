@@ -9,6 +9,7 @@ import { API_VERSION } from '../../../src/salesforce.js';
 import { ORG_ID } from '../../../src/testing/specVectors.js';
 import type { SoqlClient } from '@cclabsnz/sf-core';
 import { sfApiError } from '../../fixtures/httpApiError.js';
+import { cappedOrg } from '../../fixtures/cappedOrg.js';
 
 const VERSIONED = ['ForwardedForIp', 'AuthMethodReference', 'AuthContextClassRef'];
 
@@ -298,5 +299,33 @@ describe('LoginHistoryCollector with the error shape jsforce actually throws', (
     expect(out.status).toBe('complete');
     expect(out.degradations).toHaveLength(1);
     expect(out.degradations[0]).toMatchObject({ code: 'INVALID_FIELD', fieldsDropped: VERSIONED });
+  });
+});
+
+describe('LoginHistoryCollector when a slice holds more rows than one query returns', () => {
+  const loginRow = (id: string, at: string) => row(0, { Id: id, LoginTime: at });
+
+  it('halves a truncated slice and collects every row', async () => {
+    const org = cappedOrg({ cap: 50, counted: true, row: loginRow });
+    const window = { from: '2026-08-10T00:00:00.000Z', to: '2026-08-14T00:00:00.000Z' };
+    const out = await new LoginHistoryCollector().collect({ ...CTX, soql: org.soql }, { window });
+
+    expect(org.asked[0]).toBe(96);
+    expect(out.status).toBe('complete');
+    expect(out.records).toHaveLength(96);
+    expect(out.achieved).toEqual([window]);
+  });
+
+  it('records QUERY_TRUNCATED at the floor, with the slice not achieved and the source not complete', async () => {
+    const org = cappedOrg({ cap: 1, perHour: 2, counted: true, row: loginRow });
+    const window = { from: '2026-08-10T00:00:00.000Z', to: '2026-08-10T01:00:00.000Z' };
+    const out = await new LoginHistoryCollector().collect({ ...CTX, soql: org.soql }, { window });
+
+    expect(out.status).toBe('degraded');
+    expect(out.achieved).toEqual([]);
+    expect(out.records).toEqual([]);
+    expect(out.degradations).toEqual([
+      expect.objectContaining({ source: 'login-history', code: 'QUERY_TRUNCATED', window }),
+    ]);
   });
 });

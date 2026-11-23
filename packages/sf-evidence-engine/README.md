@@ -1,6 +1,6 @@
 # @cclabsnz/sf-evidence-engine
 
-The library behind [`sf evidence`](https://www.npmjs.com/package/@cclabsnz/sf-evidence): collectors for Salesforce audit data,
+The library behind [`sf evidence`](https://www.npmjs.com/package/@cclabsnz/sf-evidence): collectors for Salesforce audit data (Setup Audit Trail, Login History and org limits),
 canonicalisation and hashing, manifests and the hash chain, the `local` and `git` sinks, the
 archive reader, and the collect pipeline. It's everything in sf-evidence that doesn't need the
 `sf` CLI.

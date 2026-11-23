@@ -65,7 +65,7 @@ when someone has to act.
 ### `collect`
 
 ```bash
-sf evidence collect --target-org my-org --source audit-trail,limits
+sf evidence collect --target-org my-org --source audit-trail,login-history,limits
 sf evidence collect --since P30D            # the last 30 days, as a duration
 sf evidence collect --since PT12H           # the last 12 hours
 sf evidence collect --since 2026-03-01      # or an ISO date
@@ -76,7 +76,7 @@ sf evidence collect --sink git --sign       # commit each manifest, signed with 
 
 | Flag | Meaning |
 |---|---|
-| `--source` | `audit-trail` (default) and/or `limits`, comma-separated. |
+| `--source` | `audit-trail`, `login-history` and/or `limits`, comma-separated. Defaults to `audit-trail,login-history`. |
 | `--since` | An ISO date or datetime with a zone, or a duration (`P30D`, `PT12H`). Defaults to the watermark, else the full window. |
 | `--until` | Collect up to this ISO date or datetime with a zone, or a duration ago (`P1D`, `PT12H`). Defaults to now. A `--since` or `--until` later than now is a usage error (exit 2). |
 | `--backfill` | Re-collect the whole retention window even where the archive already covers it. Records already archived are deduplicated, not duplicated. |
@@ -90,12 +90,16 @@ sf evidence collect --sink git --sign       # commit each manifest, signed with 
 Sources:
 
 - `audit-trail` is an event source: Setup Audit Trail, kept by Salesforce for 180 days.
+- `login-history` is an event source: the `LoginHistory` object, all 25 fields, with a
+  180-day backfill (Salesforce documents no retention for it, so 180 days is an assumption).
+  It has no usernames. It needs **Monitor Login History**; without it `collect` exits 4 on
+  every run.
 - `limits` is a snapshot source: one sample of the org's `/limits` per run, keyed to the hour
   (`limits:{org_id}:{YYYY-MM-DDTHH}`), so two runs in one hour write one sample. Salesforce
   stores no limits history, so a missed hour cannot be recovered afterwards. Run `collect` at
   least daily to keep `limits` current.
 
-Every request is pinned to API version 64.0, and each record states the version it came from
+Every request is pinned to API version 67.0, and each record states the version it came from
 in `api_version`.
 
 ### `status`
@@ -295,7 +299,8 @@ mirrored. Most people want one sink.
 
 ## The permission you need
 
-Running `sf evidence collect` requires **View Setup and Configuration**, plus the standard
+Running `sf evidence collect` requires **View Setup and Configuration** and **Monitor Login
+History** (`MonitorLoginHistory`, for the `login-history` source), plus the standard
 **API Enabled** permission every API integration needs. The `limits` source reads the
 `/limits` REST resource under the same permissions. This is documented for Setup UI
 access and for the `/limits` REST resource; Salesforce's Object Reference does not state
@@ -305,7 +310,7 @@ treat it as the best-documented answer rather than a guarantee from Salesforce.
 Explicitly **not required** — and worth telling your security reviewer this directly:
 **View All Data**, **Modify All Data**, and **Manage Users**. `sf-evidence` never reads
 business data and never touches user administration; it only reads the Setup Audit Trail
-object and the `/limits` resource.
+object, the `LoginHistory` object and the `/limits` resource.
 
 ## Run `sf evidence explain` first
 
@@ -313,7 +318,7 @@ Before you point this at a production org, run:
 
 ```bash
 sf evidence explain
-sf evidence explain --source audit-trail,limits --sink git
+sf evidence explain --source audit-trail,login-history,limits --sink git
 ```
 
 The output for every source and both sinks is published as
@@ -419,8 +424,9 @@ In 0.1.0, these API changes were not backward compatible:
 
 This release is intentionally narrow. Stated plainly, so it isn't discovered the hard way:
 
-- **Two sources**: `audit-trail` (Setup Audit Trail) and `limits`. `login-history` is
-  specified but not implemented.
+- **Three sources**: `audit-trail` (Setup Audit Trail), `login-history` and `limits`. Login
+  history has no usernames, and a backfill interrupted partway resumes without the API-budget
+  check.
 - **Two sinks only**: `local` (plain filesystem) and `git`. `s3`, `azure` and `siem` are
   specified but not implemented, and so is the `object-lock` anchor mode that depends on
   `s3`/`azure`.

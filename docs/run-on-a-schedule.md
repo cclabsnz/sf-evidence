@@ -15,7 +15,7 @@ Everything referenced here is in [`templates/scheduling/`](../templates/scheduli
 | `run-sf-evidence.sh` | One run: collect, push, status, verify, with a fixed exit-code policy. Every scheduler calls it. |
 | `github-actions/sf-evidence.yml` | GitHub Actions workflow. |
 | `azure-devops/azure-pipelines.yml` | Azure Pipelines definition. |
-| `salesforce/SF_Evidence_Reader.permissionset-meta.xml` | The two permissions `collect` needs, and nothing else. |
+| `salesforce/SF_Evidence_Reader.permissionset-meta.xml` | The three permissions `collect` needs, and nothing else. |
 | `archive.gitignore` | Keeps the disposable `_state/` cache out of the archive repository. |
 
 ## 1. Salesforce: a read-only integration user
@@ -28,9 +28,12 @@ Everything referenced here is in [`templates/scheduling/`](../templates/scheduli
 2. **Grant only what `collect` needs.** Add
    `SF_Evidence_Reader.permissionset-meta.xml` to an sfdx project under
    `force-app/main/default/permissionsets/`, put it into the org through your normal
-   change process, and assign it to the user. It grants **API Enabled** and
-   **View Setup and Configuration**. It does not grant View All Data, Modify All Data or
-   Manage Users, and sf-evidence needs none of them. `sf evidence explain` lists every
+   change process, and assign it to the user. It grants **API Enabled**,
+   **View Setup and Configuration** and **Monitor Login History**. It does not grant View All Data, Modify All Data or
+   Manage Users, and sf-evidence needs none of them. The templates collect
+   `audit-trail,login-history,limits`. If you copied a template before 0.3.0, or set
+   `SF_EVIDENCE_SOURCES` yourself, add `login-history` to your list and assign the updated
+   permission set, or `collect` exits 4 without it. `sf evidence explain` lists every
    query it issues, if your reviewer wants to check.
 
 ## 2. Salesforce: an External Client App for JWT bearer auth

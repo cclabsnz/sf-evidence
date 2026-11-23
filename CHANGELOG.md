@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+- Upgrade note: login history is now collected by default, so the default sources are
+  `audit-trail,login-history`. It needs the **Monitor Login History** permission
+  (`MonitorLoginHistory`). Until the running user has it, `collect` exits 4 (degraded) on
+  every run. Grant it, for example by redeploying `SF_Evidence_Reader.permissionset-meta.xml`
+  from the templates, which now includes it. A schedule copied from an earlier template, or
+  one that sets `SF_EVIDENCE_SOURCES` or `--source`, keeps its own list, so add
+  `login-history` to it. `sf evidence doctor --target-org` now has a `Login History access`
+  row that tells you whether the permission is missing.
+- New source, `login-history`: the `LoginHistory` object, with a 180-day backfill on the
+  first run and all 25 fields. Fields that need a newer API version are dropped, with the
+  source marked partial, when the org is on an older one. Every request now uses API version
+  67.0 (it was 64.0), for every source. Each record still states the version it came from in
+  `api_version`.
+- Collection is committed in rounds of 7 days. A first backfill on one org writes one
+  manifest per 7 days (about 26 for 180 days), and the record files of later rounds get an
+  `-rNN` suffix. Daily runs still write one manifest.
+- `sf evidence query --view login_history` returns one row per login attempt.
+  `docs/query-views.md` lists the columns.
+- `explain` default sources now match `collect`.
+- The scheduling permission set grants `MonitorLoginHistory` alongside `ApiEnabled` and
+  `ViewSetup`.
+- Known gaps: login history has no usernames. Salesforce documents no retention for
+  `LoginHistory`, so the 180-day window is an assumption. A backfill interrupted partway
+  resumes without the API-budget check, and the remainder is planned as a normal incremental
+  window.
+- All three packages release at 0.3.0, and the plugins depend on the engine at `^0.3.0`.
+
 ## 0.2.0 (2026-11-19)
 
 - New plugin, `@cclabsnz/sf-evidence-query`, adds `sf evidence query`: one read-only SQL

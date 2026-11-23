@@ -1,6 +1,6 @@
 {
   "name": "@cclabsnz/sf-evidence-engine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Collection, hash chain, sinks and archive reading behind sf evidence: the read-only Salesforce audit-data archive format, usable without the sf CLI.",
   "license": "Apache-2.0",
   "author": "CloudCounsel Limited",

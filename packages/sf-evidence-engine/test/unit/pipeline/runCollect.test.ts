@@ -11,6 +11,7 @@ import { GENESIS_PREV } from '../../../src/types/manifest.js';
 import { mergeWindows } from '../../../src/lib/windows.js';
 import type { SoqlClient } from '@cclabsnz/sf-core';
 import { sfApiError } from '../../fixtures/httpApiError.js';
+import { cappedOrg } from '../../fixtures/cappedOrg.js';
 import type { Sink } from '../../../src/types/sink.js';
 
 function fakeSoql(impl: (soql: string) => Promise<unknown[]>): SoqlClient {
@@ -1150,6 +1151,30 @@ describe('runCollect in 7-day rounds', () => {
     expect(summaries.find((s) => s.source === 'audit-trail')!.coverage).toEqual([
       { from: SINCE20, to: NOW.toISOString() },
     ]);
+  });
+
+  it('archives a slice too big to fetch at the floor as QUERY_TRUNCATED, never as covered', async () => {
+    // Three rows an hour, at most two per query: the one-hour window cannot be fetched whole.
+    const org = cappedOrg({ cap: 2, perHour: 3, counted: true, row: (id, at) => ({ ...ROW, Id: id, CreatedDate: at }) });
+    const since = '2026-08-15T07:00:00.000Z';
+    const until = '2026-08-15T08:00:00.000Z';
+    const result = await runCollect(
+      args({ soql: org.soql, sources: ['audit-trail' as const], since, until }),
+    );
+
+    expect(result.manifests).toHaveLength(1);
+    const manifest = (await sink.readManifest(ORG_ID, 1))!;
+    expect(manifest.sources[0]).toMatchObject({ source: 'audit-trail', status: 'degraded', achieved: [] });
+    expect(manifest.degradations).toEqual([
+      expect.objectContaining({ code: 'QUERY_TRUNCATED', window: { from: since, to: until } }),
+    ]);
+    expect(result.sources[0]!.recordsWritten).toBe(0);
+    expect(result.degraded).toBe(true);
+
+    const report = await verifyChain(sink, ORG_ID, { anchor: 'none', deep: true });
+    expect(report.breaks).toEqual([]);
+    const summaries = await new ArchiveReader(sink).summarise(ORG_ID, { persist: false });
+    expect(summaries.find((s) => s.source === 'audit-trail')?.coverage ?? []).toEqual([]);
   });
 
   it('issues the rejected versioned-field query once per run and records the downgrade in every round', async () => {

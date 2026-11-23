@@ -174,6 +174,34 @@ describe('end to end: collect → verify → tamper → verify', () => {
     expect(text).toContain('INSUFFICIENT_ACCESS');
   });
 
+  it('exits 4, not 1, when the denial arrives in the shape jsforce throws (no statusCode)', async () => {
+    // jsforce's HttpApiError (lib/http-api.js), mirrored: name and errorCode set to the code,
+    // the response body in `data`, and no statusCode. Before 0.3.0 this shape was not
+    // recognised, and a missing permission failed collect outright.
+    const httpApiError = (errorCode: string, message: string): Error =>
+      Object.assign(new Error(message), { name: errorCode, errorCode, data: { errorCode, message } });
+    const denied = {
+      query: async () => ({ totalSize: 0, done: true, records: [] }),
+      queryAll: (async (soql: string) => {
+        if (soql.includes('FROM LoginHistory')) {
+          throw httpApiError('INSUFFICIENT_ACCESS', 'Insufficient privileges to access LoginHistory');
+        }
+        return [];
+      }) as SoqlClient['queryAll'],
+    } as SoqlClient;
+
+    const collected = await runCollect({
+      orgId: ORG_ID,
+      sources: ['audit-trail', 'login-history'],
+      sinks: [sink],
+      soql: denied,
+      now: new Date('2026-08-15T09:00:00.000Z'),
+    });
+    expect(collected.sources.find((s) => s.source === 'audit-trail')!.status).toBe('complete');
+    expect(collected.sources.find((s) => s.source === 'login-history')!.status).toBe('degraded');
+    expect(exitCodeFor(collected, false)).toBe(EXIT.DEGRADED);
+  });
+
   it('exits 4 on the collect that degraded, and 4 again on every later verify', async () => {
     // The pairing that makes exit 4 useful: `collect` flags it on the day it happens, and
     // `verify` keeps flagging it for as long as the incomplete data is in the archive.

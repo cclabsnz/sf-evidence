@@ -51,6 +51,20 @@ describe('layout', () => {
     expect(p.endsWith('part-20260815T090012Z-ABCDEFGH.ndjson')).toBe(true);
   });
 
+  it('appends a part suffix when given, so two rounds of one run never share a file name', () => {
+    const args = {
+      orgId: ORG,
+      source: 'audit-trail' as const,
+      occurredAt: '2026-08-14T02:11:09.000Z',
+      collectedAt: '2026-08-15T09:00:12.482Z',
+      runId: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    };
+    const p = recordFilePath({ ...args, part: 'r02' });
+    expect(p.endsWith('part-20260815T090012Z-ABCDEFGH-r02.ndjson')).toBe(true);
+    expect(isRecordPath(p, ORG, 'audit-trail')).toBe(true);
+    expect(recordFilePath({ ...args, part: undefined })).toBe(recordFilePath(args));
+  });
+
   it('zero-pads the manifest sequence to eight digits so files sort lexically', () => {
     expect(manifestPath(ORG, 1)).toBe(
       'org_id=00D5j000000AbCdEAK/_chain/00000001.manifest.json',

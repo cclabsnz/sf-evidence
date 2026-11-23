@@ -87,3 +87,47 @@ export function normaliseAuditTrailRow(
     },
   };
 }
+
+export const LOGIN_HISTORY_SCHEMA = 'sf-evidence/login-history/v1';
+
+/** A raw LoginHistory row as returned by the SOQL client. Every selected field is flat. */
+export interface LoginHistoryRow {
+  Id?: string;
+  LoginTime?: string;
+  [k: string]: unknown;
+}
+
+/**
+ * Normalise one LoginHistory row. The payload holds exactly `fields`, the list the row was
+ * queried with: a field that came back null stays null, and one the org left out of the row
+ * is written as null, so "asked for and empty" is never confused with "never asked for".
+ */
+export function normaliseLoginHistoryRow(
+  row: LoginHistoryRow,
+  ctx: NormaliseContext,
+  fields: readonly string[],
+): NormalisedRecord {
+  if (!row.Id) {
+    throw new Error('LoginHistory row is missing Id; it cannot be deduplicated.');
+  }
+  if (!row.LoginTime) {
+    throw new Error(`LoginHistory row ${row.Id} is missing LoginTime.`);
+  }
+
+  const loginTime = toIsoMs(row.LoginTime);
+  const payload: Record<string, unknown> = {};
+  for (const f of fields) payload[f] = orNull(row[f]);
+  // Same convention as CreatedDate on audit-trail: the payload carries the normalised instant.
+  if ('LoginTime' in payload) payload.LoginTime = loginTime;
+
+  return {
+    schema: LOGIN_HISTORY_SCHEMA,
+    org_id: ctx.orgId,
+    source: 'login-history',
+    source_id: row.Id,
+    occurred_at: loginTime,
+    collected_at: ctx.collectedAt,
+    api_version: ctx.apiVersion,
+    payload,
+  };
+}

@@ -61,15 +61,18 @@ describe('assessStatus', () => {
   });
 
   it('marks a source with no registered collector unassessed: nulls, never computed-looking values, and exit 4', () => {
+    // Every SourceId has a collector since login-history was registered, so this stands in
+    // for a source an older or newer release archived that this one has no collector for.
+    const unregistered = 'retired-source' as SourceId;
     const s = assessStatus(
       [
         summary('audit-trail', [{ from: RETENTION_START, to: NOW_ISO }]),
-        summary('login-history', [{ from: RETENTION_START, to: '2026-03-03T17:00:00.000Z' }]),
+        summary(unregistered, [{ from: RETENTION_START, to: '2026-03-03T17:00:00.000Z' }]),
       ],
       NOW,
     );
     expect(s.rows[1]).toMatchObject({
-      source: 'login-history',
+      source: unregistered,
       kind: null,
       retentionDays: null,
       gaps: null,

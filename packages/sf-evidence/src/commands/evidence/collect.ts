@@ -43,8 +43,8 @@ full available window; every run after that is idempotent and adds only what is 
     'target-org': Flags.requiredOrg(),
     source: Flags.string({
       summary: 'Sources to collect (comma-separated).',
-      default: 'audit-trail',
-      helpValue: 'audit-trail|limits',
+      default: 'audit-trail,login-history',
+      helpValue: 'audit-trail|login-history|limits',
     }),
     sink: Flags.string({
       summary: 'Sinks to write to (comma-separated).',
@@ -193,7 +193,14 @@ full available window; every run after that is idempotent and adds only what is 
     }
 
     if (!result.dryRun) {
-      this.log(`\nmanifest seq ${result.manifest.seq}  ${result.manifest.hash}`);
+      // A long collection is committed in 7-day rounds, one manifest each; the hash is the
+      // last one's, the head this run leaves.
+      const { manifests } = result;
+      this.log(
+        manifests.length === 1
+          ? `\nmanifest seq ${result.manifest.seq}  ${result.manifest.hash}`
+          : `\nmanifests #${manifests[0]!.seq}–#${result.manifest.seq} (${manifests.length})  ${result.manifest.hash}`,
+      );
       for (const sink of result.sinks) {
         if (!sink.written) {
           this.warn(

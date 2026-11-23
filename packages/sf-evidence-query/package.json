@@ -1,6 +1,6 @@
 {
   "name": "@cclabsnz/sf-evidence-query",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Query an sf-evidence archive with SQL: a sandboxed, read-only DuckDB `sf evidence query` command for the sf CLI.",
   "license": "Apache-2.0",
   "author": "CloudCounsel Limited",

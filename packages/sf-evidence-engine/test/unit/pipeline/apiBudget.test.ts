@@ -183,7 +183,9 @@ describe('runCollect API budget guard', () => {
       expect(s.degradations[0]!.detail).toMatch(/repair/i);
       expect(result.degraded).toBe(true);
 
-      const entry = (await sink.readManifest(ORG_ID, 2))!;
+      // The August seed was committed in rounds; this run's one manifest is the head.
+      expect(result.manifests).toHaveLength(1);
+      const entry = (await sink.readManifest(ORG_ID, result.manifest.seq))!;
       expect(entry.sources[0]!.achieved).toEqual([incremental]);
       expect(entry.degradations).toEqual(s.degradations);
     });

@@ -35,7 +35,7 @@ export interface ViewColumn {
 }
 
 export interface ViewDefinition {
-  name: 'records' | 'setup_changes' | 'limit_samples';
+  name: 'records' | 'setup_changes' | 'limit_samples' | 'login_history';
   version: 1;
   /** What one row is. */
   grain: string;
@@ -242,4 +242,133 @@ const LIMIT_SAMPLES: ViewDefinition = {
   ],
 };
 
-export const VIEWS: readonly ViewDefinition[] = [RECORDS, SETUP_CHANGES, LIMIT_SAMPLES];
+const LOGIN_HISTORY: ViewDefinition = {
+  name: 'login_history',
+  version: 1,
+  grain: 'One row per login attempt.',
+  description:
+    'Login attempts from LoginHistory, successful and failed, with the verbatim Salesforce fields flattened to columns.',
+  sources: ['login-history'],
+  timeColumn: 'occurred_at_utc',
+  columns: [
+    {
+      name: 'occurred_at_utc',
+      type: 'TIMESTAMP',
+      description: 'LoginTime, UTC wall time.',
+      expr: { duckdb: "timezone('UTC', occurred_at)" },
+    },
+    {
+      name: 'occurred_at_local',
+      type: 'TIMESTAMPTZ',
+      description: 'LoginTime as an instant, shown in the --timezone zone.',
+      expr: { duckdb: 'occurred_at' },
+    },
+    {
+      name: 'user_id',
+      type: 'VARCHAR',
+      description: "UserId: the user who attempted the login. LoginHistory carries no username.",
+      expr: { duckdb: field('UserId') },
+    },
+    {
+      name: 'status',
+      type: 'VARCHAR',
+      description: "Status, verbatim: Success or Salesforce's failure text (e.g. Invalid Password).",
+      expr: { duckdb: field('Status') },
+    },
+    {
+      name: 'login_type',
+      type: 'VARCHAR',
+      description: "LoginType, verbatim (e.g. Application, Remote Access 2.0).",
+      expr: { duckdb: field('LoginType') },
+    },
+    {
+      name: 'login_sub_type',
+      type: 'VARCHAR',
+      description: "LoginSubType, verbatim (e.g. OAuth 2.0 Web Server Flow).",
+      expr: { duckdb: field('LoginSubType') },
+    },
+    {
+      name: 'application',
+      type: 'VARCHAR',
+      description: "Application the login came through, verbatim.",
+      expr: { duckdb: field('Application') },
+    },
+    {
+      name: 'browser',
+      type: 'VARCHAR',
+      description: "Browser, verbatim.",
+      expr: { duckdb: field('Browser') },
+    },
+    {
+      name: 'platform',
+      type: 'VARCHAR',
+      description: "Platform (operating system), verbatim.",
+      expr: { duckdb: field('Platform') },
+    },
+    {
+      name: 'source_ip',
+      type: 'VARCHAR',
+      description: "SourceIp: the IP address the login came from.",
+      expr: { duckdb: field('SourceIp') },
+    },
+    {
+      name: 'forwarded_for_ip',
+      type: 'VARCHAR',
+      description: "ForwardedForIp: the client address behind a proxy, when Salesforce recorded one.",
+      expr: { duckdb: field('ForwardedForIp') },
+    },
+    {
+      name: 'country_iso',
+      type: 'VARCHAR',
+      description: "CountryIso: two-letter country code Salesforce resolved from the IP. NULL when it could not.",
+      expr: { duckdb: field('CountryIso') },
+    },
+    {
+      name: 'login_url',
+      type: 'VARCHAR',
+      description: "LoginUrl: the host the user logged in at.",
+      expr: { duckdb: field('LoginUrl') },
+    },
+    {
+      name: 'api_type',
+      type: 'VARCHAR',
+      description: "ApiType, verbatim (e.g. SOAP Enterprise). NULL for UI logins.",
+      expr: { duckdb: field('ApiType') },
+    },
+    {
+      name: 'api_version',
+      type: 'VARCHAR',
+      description: "ApiVersion of the login, verbatim (e.g. 64.0). Not the version the record was collected with.",
+      expr: { duckdb: field('ApiVersion') },
+    },
+    {
+      name: 'auth_method_reference',
+      type: 'VARCHAR',
+      description: "AuthMethodReference: how the user authenticated (e.g. password, MFA), verbatim.",
+      expr: { duckdb: field('AuthMethodReference') },
+    },
+    {
+      name: 'tls_protocol',
+      type: 'VARCHAR',
+      description: "TlsProtocol, verbatim (e.g. TLS 1.3).",
+      expr: { duckdb: field('TlsProtocol') },
+    },
+    {
+      name: 'auth_context_class_ref',
+      type: 'VARCHAR',
+      description: "AuthContextClassRef: the authentication context class, verbatim.",
+      expr: { duckdb: field('AuthContextClassRef') },
+    },
+    SOURCE_ID,
+    ORG_ID,
+    ORG_LABEL,
+    COLLECTED_AT_UTC,
+  ],
+  knownGaps: [
+    'No username: LoginHistory carries only UserId. Join user_id to setup_changes.performed_by_id to name users who also made setup changes.',
+    "Status is free text from Salesforce (e.g. Success, Invalid Password); match on it, don't assume a closed list.",
+    "forwarded_for_ip, auth_method_reference and auth_context_class_ref are NULL for records collected after the org rejected them (see the manifest's fieldsDropped).",
+  ],
+};
+
+export const VIEWS: readonly ViewDefinition[] = [RECORDS, SETUP_CHANGES, LIMIT_SAMPLES, LOGIN_HISTORY];

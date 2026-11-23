@@ -26,7 +26,7 @@ pool:
 variables:
   - group: sf-evidence
   - name: SF_EVIDENCE_VERSION
-    value: 0.1.0 # pin; upgrade deliberately
+    value: 0.3.0 # pin; upgrade deliberately
   - name: SF_EVIDENCE_TARGET_ORG
     value: evidence-org
 

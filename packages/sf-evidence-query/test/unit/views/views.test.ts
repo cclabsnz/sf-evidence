@@ -101,6 +101,47 @@ describe('setup_changes', () => {
   });
 });
 
+describe('login_history', () => {
+  it('counts logins by status', async () => {
+    const r = await (await open()).run('SELECT status, count(*) AS n FROM login_history GROUP BY ALL ORDER BY 1');
+    expect(r.rows.map((x) => [x.status, Number(x.n)])).toEqual(FIXTURE.login.statusCounts);
+  });
+
+  it('exposes LoginTime as occurred_at_utc and as a local instant', async () => {
+    const row = await one(await open(), `SELECT * FROM login_history WHERE source_id = '${FIXTURE.login.ids.ok}'`);
+    expect(row.occurred_at_utc).toBe('2026-10-05T01:15:00Z');
+    expect(row.occurred_at_local).toBe('2026-10-05T14:15:00+13:00');
+    expect(row.user_id).toBe('005A00000000001AAA');
+    expect(row.org_label).toBe(FIXTURE.orgNames.A);
+  });
+
+  it('returns SQL NULL for a null payload field', async () => {
+    const row = await one(await open(), `SELECT * FROM login_history WHERE source_id = '${FIXTURE.login.ids.noCountry}'`);
+    expect(row.country_iso).toBeNull();
+    expect(row.forwarded_for_ip).toBeNull();
+    expect(row.status).toBe('Failed: Computer Activation Required');
+  });
+
+  it('is empty, with the same columns, for an org with no login history', async () => {
+    const full = (await (await open()).run('SELECT * FROM login_history')).columns;
+    session!.close();
+    const empty = await (await open([FIXTURE.orgB])).run('SELECT * FROM login_history');
+    expect(empty.rows).toEqual([]);
+    expect(empty.columns).toEqual(full);
+  });
+
+  it('is read as a failed-logins question: by user and country', async () => {
+    const r = await (await open()).run(
+      `SELECT user_id, country_iso, count(*) AS failures FROM login_history
+       WHERE status <> 'Success' GROUP BY ALL ORDER BY failures DESC, user_id`,
+    );
+    expect(r.rows.map((x) => [x.user_id, x.country_iso, Number(x.failures)])).toEqual([
+      ['005A00000000002AAA', 'NZ', 2],
+      ['005A00000000003AAA', null, 1],
+    ]);
+  });
+});
+
 describe('records', () => {
   it('pins the hive partition types', async () => {
     const s = await open();

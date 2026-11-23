@@ -17,7 +17,7 @@ const INSTANCE_URL = 'https://<your-org>.my.salesforce.com';
 const ARCHIVE = './sf-evidence-archive';
 
 const WINDOW_NOTE =
-  'The audit-trail <from> and <to> are the collection window, sliced by month and narrowed on timeout.';
+  'The audit-trail and login-history <from> and <to> are the collection window, sliced and narrowed on timeout.';
 
 const sources = Object.keys(COLLECTORS);
 const sinkSets = [

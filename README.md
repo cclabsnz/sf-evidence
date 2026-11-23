@@ -3,7 +3,7 @@
 Salesforce deletes Setup Audit Trail records after 180 days. sf-evidence copies them out
 before that happens, into a hash-chained archive you own and can verify without us.
 
-It's a read-only `sf` CLI plugin. It needs **View Setup and Configuration** and **API
+It's a read-only `sf` CLI plugin. It needs **View Setup and Configuration**, **Monitor Login History** and **API
 Enabled**, and nothing else: no View All Data, no Modify All Data. It runs no DML, sends no
 telemetry, and creates no infrastructure. The only network destination it contacts is your
 org. `sf evidence explain` prints every query, file write and network destination before you
@@ -34,18 +34,18 @@ is close to being deleted.
 
 | | |
 |---|---|
-| Sources | `audit-trail` (Setup Audit Trail), `limits` (org limits, sampled each run) |
+| Sources | `audit-trail` (Setup Audit Trail) and `login-history` (Login History), collected by default; `limits` (org limits, sampled each run), opt in |
 | Sinks | `local` filesystem, `git` (with optional signed commits) |
 | Commands | `collect`, `status`, `verify`, `explain`, `doctor`, and `query` in a separate plugin |
 | Format | NDJSON records, JCS + SHA-256 hash chain, Merkle root per source |
 
-Login History, S3 with Object Lock, Parquet and rule packs are specified but not built
+S3 with Object Lock, Parquet and rule packs are specified but not built
 yet.
 
 ## Ask the archive questions in SQL
 
-`sf evidence query` runs SQL over the archive on your machine, through three views:
-`setup_changes`, `limit_samples` and `records`. It's a separate plugin, so a scheduled job
+`sf evidence query` runs SQL over the archive on your machine, through four views:
+`setup_changes`, `limit_samples`, `login_history` and `records`. It's a separate plugin, so a scheduled job
 that only collects never downloads DuckDB:
 
 ```bash
@@ -56,7 +56,7 @@ sf evidence query --org-id <your-org-id> --sql "SELECT performed_by, count(*) AS
 It contacts no org and no network, writes nothing, and reads only the record files the
 hash chain covers. Its results aren't verified, so run `verify` too when the answer is
 going to an auditor. [Query the archive with SQL](docs/query.md) has install notes and
-five worked questions, and [`docs/query-views.md`](docs/query-views.md) lists every
+six worked questions, and [`docs/query-views.md`](docs/query-views.md) lists every
 column. The [plugin README](packages/sf-evidence/README.md) lists the
 limitations plainly. Read them before you rely on it.
 

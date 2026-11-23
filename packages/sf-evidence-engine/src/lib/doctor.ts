@@ -1,4 +1,5 @@
 import { EXIT, type ExitCode } from './exit.js';
+import { PERMISSION_ERROR_CODES, salesforceErrorCode } from './errors.js';
 import type { Sink } from '../types/sink.js';
 
 /**
@@ -45,6 +46,11 @@ export interface DoctorEnv {
   extraChecks?(): Promise<Check[]>;
   /** The org's clock. Supplied only when an org was named; absent means skew was not measured. */
   orgNow?(): Promise<Date>;
+  /**
+   * Reads one LoginHistory row (`SELECT Id FROM LoginHistory LIMIT 1`). Supplied only when an
+   * org was named; resolves on success and rejects with the API error otherwise.
+   */
+  probeLoginHistory?(): Promise<void>;
   /** The local clock; defaults to `new Date()`. */
   now?(): Date;
 }
@@ -67,6 +73,7 @@ export async function runChecks(env: DoctorEnv): Promise<Check[]> {
 
   checks.push(...(await queryEngineChecks(env)));
   checks.push(await clockCheck(env));
+  checks.push(await loginHistoryCheck(env));
 
   // Listed, never omitted: a reader must be able to tell "passed" from "never looked".
   for (const name of ['DuckDB httpfs/azure extensions', 'Cloud credentials', 'Licence file', 'Config file']) {
@@ -246,6 +253,30 @@ async function clockCheck(env: DoctorEnv): Promise<Check> {
     };
   } catch (err) {
     return { name, level: 'warn', detail: `not checked: could not read the org clock: ${message(err)}`, checked: false };
+  }
+}
+
+async function loginHistoryCheck(env: DoctorEnv): Promise<Check> {
+  const name = 'Login History access';
+  if (!env.probeLoginHistory) {
+    return { name, level: 'ok', detail: 'not checked: pass --target-org to test access', checked: false };
+  }
+  try {
+    await env.probeLoginHistory();
+    return { name, level: 'ok', detail: 'the running user can read LoginHistory', checked: true };
+  } catch (err) {
+    const code = salesforceErrorCode(err);
+    if (code !== undefined && PERMISSION_ERROR_CODES.has(code)) {
+      return {
+        name,
+        level: 'warn',
+        detail: `the running user cannot read LoginHistory (${code}); the "Monitor Login History" permission (API name MonitorLoginHistory) is missing`,
+        remediation:
+          'Assign the SF Evidence Reader permission set (it includes MonitorLoginHistory), or collect without login-history using --source audit-trail,limits.',
+        checked: true,
+      };
+    }
+    return { name, level: 'warn', detail: `could not test LoginHistory access: ${message(err)}`, checked: true };
   }
 }
 

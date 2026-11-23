@@ -100,7 +100,7 @@ export default class EvidenceQuery extends SfCommand<QueryCommandResult> {
   public static readonly summary = 'Query the archive with SQL, or print one of its views';
 
   public static readonly description = `Runs one read-only SELECT against the archive in an in-process, sandboxed DuckDB, or
-prints a view (records, setup_changes, limit_samples) with --view. Queries see only the record
+prints a view (records, setup_changes, limit_samples, login_history) with --view. Queries see only the record
 files the hash chain covers; files it does not cover are excluded and counted in a warning.
 
 Results are not verified: this command says nothing about chain validity. Run

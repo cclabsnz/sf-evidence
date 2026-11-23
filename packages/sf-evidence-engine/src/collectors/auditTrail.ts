@@ -1,5 +1,6 @@
 import { AUDIT_TRAIL_FIELDS, normaliseAuditTrailRow, type AuditTrailRow } from './normalise.js';
 import { collectSliced } from './slicing.js';
+import { queryAllComplete } from './fetch.js';
 import { toSoqlDateTime } from '../lib/time.js';
 import type { TimeWindow } from '../types/manifest.js';
 import type { NormalisedRecord, SourceId } from '../types/record.js';
@@ -75,7 +76,7 @@ export class AuditTrailCollector implements EventCollector {
 
     const sliced = await collectSliced(
       window,
-      (slice) => ctx.soql.queryAll<AuditTrailRow>(soqlFor(slice)),
+      (slice) => queryAllComplete<AuditTrailRow>(ctx.soql, soqlFor(slice)),
       { source: this.source },
     );
 

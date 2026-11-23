@@ -1,4 +1,4 @@
-import { classifyDegradation } from '../lib/errors.js';
+import { classifyDegradation, PERMISSION_ERROR_CODES, salesforceErrorCode } from '../lib/errors.js';
 import { toIsoMs } from '../lib/time.js';
 import { mergeWindows } from '../lib/windows.js';
 import type { Degradation, TimeWindow } from '../types/manifest.js';
@@ -34,21 +34,27 @@ export function monthSlices(window: TimeWindow): TimeWindow[] {
   return slices;
 }
 
-function isQueryTimeout(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as { errorCode?: unknown }).errorCode === 'QUERY_TIMEOUT'
-  );
+/** Errors a narrower slice can get past: the org timed out, or returned fewer rows than matched. */
+const SPLITTABLE = new Set(['QUERY_TIMEOUT', 'QUERY_TRUNCATED']);
+
+function isSplittable(err: unknown): boolean {
+  const code = salesforceErrorCode(err);
+  return code !== undefined && SPLITTABLE.has(code);
 }
 
 /**
- * Fetch a window month by month, halving any slice that hits QUERY_TIMEOUT (SPEC §10.3).
+ * Fetch a window month by month, halving any slice that hits QUERY_TIMEOUT (SPEC §10.3), or
+ * that returned fewer rows than it matched (QUERY_TRUNCATED, thrown by `queryAllComplete`).
  *
  * Halves are split at the millisecond midpoint and retried independently. A slice whose
- * halves would be shorter than the floor is recorded as a QUERY_TIMEOUT degradation with its
- * exact bounds, so the gap is explicit and re-collectable. Other recognised errors are
+ * halves would be shorter than the floor is recorded as a QUERY_TIMEOUT or QUERY_TRUNCATED
+ * degradation with its exact bounds, so the gap is explicit and re-collectable. A truncated
+ * slice's rows are discarded: they are not the slice. Other recognised errors are
  * recorded against the slice without retry; unrecognised errors propagate.
+ *
+ * A permission error (`PERMISSION_ERROR_CODES`) stops the fetch: no later slice is asked
+ * for, since another window will not grant the permission, and one degradation covers the
+ * denied slice to the end of the window.
  *
  * `achieved` is built only from slices whose fetch returned.
  */
@@ -61,8 +67,10 @@ export async function collectSliced<T>(
   const rows: T[] = [];
   const succeeded: TimeWindow[] = [];
   const degradations: Degradation[] = [];
+  let denied = false;
 
   const run = async (slice: TimeWindow): Promise<void> => {
+    if (denied) return;
     try {
       // A loop, not push(...rows): spreading a large slice as call arguments overflows the stack.
       for (const row of await fetchSlice(slice)) rows.push(row);
@@ -73,7 +81,13 @@ export async function collectSliced<T>(
       // An unrecognised failure must not be recorded as reduced coverage.
       if (!d) throw err;
 
-      if (isQueryTimeout(err)) {
+      if (PERMISSION_ERROR_CODES.has(d.code)) {
+        denied = true;
+        degradations.push({ ...d, window: { from: slice.from, to: window.to } });
+        return;
+      }
+
+      if (isSplittable(err)) {
         const from = Date.parse(slice.from);
         const half = Math.floor((Date.parse(slice.to) - from) / 2);
         if (half >= floorMs) {

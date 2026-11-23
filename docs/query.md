@@ -5,7 +5,7 @@ like "who changed profiles through Login-As last month?" or "which limits are ne
 full?". It reads the archive only. It contacts no org and no network, and it writes
 nothing.
 
-You need to know SQL. You don't need to know how the archive stores records: three views
+You need to know SQL. You don't need to know how the archive stores records: four views
 flatten them into ordinary tables.
 
 ## Install
@@ -37,12 +37,13 @@ The `Query engine` row should say `ok` and show the DuckDB version. If it says
 `not installed`, the query plugin isn't installed. If it's a warning, DuckDB failed to
 load: reinstall with `sf plugins install @cclabsnz/sf-evidence-query`.
 
-## The three views
+## The four views
 
 | View | One row per | Time column |
 |---|---|---|
 | `setup_changes` | Setup Audit Trail entry | `occurred_at_utc` |
 | `limit_samples` | limit per sample, from `limits` | `sampled_at_utc` |
+| `login_history` | login attempt, successful or failed | `occurred_at_utc` |
 | `records` | archived record, any source, with the payload as JSON | `occurred_at_utc` |
 
 [`query-views.md`](query-views.md) lists every column with its type and meaning. It is
@@ -62,6 +63,12 @@ Things in the views that catch people out:
 - **Nested limits aren't in `limit_samples`.** Only top-level limits are. A sub-limit such
   as `PermissionSets.CreateCustom` is read from `records.payload`; there's an example at
   the end.
+- **Logins have a user id, not a username.** `login_history.user_id` is the only
+  identity LoginHistory carries. Join it to `setup_changes.performed_by_id` to name users
+  who also made setup changes.
+- **`status` is free text.** `Success` is the only value to rely on. Failures read
+  `Invalid Password`, `Failed: Computer Activation Required` and so on, so test for
+  `status <> 'Success'` rather than listing failure values.
 - **There's no action category yet.** Filter on `action` with the codes your org actually
   uses. Question 2 shows how to list them.
 
@@ -133,14 +140,14 @@ The second row is 20 August in UTC and 21 August in Auckland. `timezone('Pacific
 returns Auckland wall-clock time with no zone attached. Cast it to a `DATE`, or group on
 it. Don't print it as a timestamp: it would come out with a `Z` it doesn't deserve.
 
-## Five worked questions
+## Six worked questions
 
 The outputs below come from the test fixture, a small invented archive with two orgs:
 `00D5j000000AbCdEAK` (*Fixture Prod*) and `00D000000000002AAA` (*Fixture UAT*). Its
 users and changes are made up. Every command was also run against a real developer-org
 archive and exits 0 there. The action codes come from that org.
 
-The fixture's audit-trail entries are from August and September 2026. Where a question
+The fixture's audit-trail entries are from August and September 2026, and its logins from October 2026. Where a question
 says "last 30 days" or "last quarter", the example uses fixed dates so the output isn't
 empty, and the rolling form is given alongside it.
 
@@ -328,6 +335,49 @@ sampled_at_local               limit_name     used  max  pct_used
 `pct_used` is NULL when a limit's `max` is 0 or missing, so those limits never match this
 filter. The subquery takes the newest sample across every org in the query. Run it with
 `--org-id` per org: with `--all-orgs`, an org sampled at a different time drops out.
+
+### 6. Failed logins by user and country last month
+
+The rolling form, for your own archive. `date_trunc('month', now())` is the first of this
+month at UTC midnight:
+
+```sql
+SELECT user_id, country_iso, count(*) AS failures
+FROM login_history
+WHERE status <> 'Success'
+  AND occurred_at_utc >= date_trunc('month', now()) - INTERVAL 1 MONTH
+  AND occurred_at_utc <  date_trunc('month', now())
+GROUP BY user_id, country_iso
+ORDER BY failures DESC, user_id
+```
+
+On the fixture, October 2026:
+
+```bash
+sf evidence query --org-id 00D5j000000AbCdEAK --sql "
+SELECT user_id, country_iso, count(*) AS failures
+FROM login_history
+WHERE status <> 'Success'
+  AND occurred_at_utc >= TIMESTAMP '2026-10-01'
+  AND occurred_at_utc <  TIMESTAMP '2026-11-01'
+GROUP BY user_id, country_iso
+ORDER BY failures DESC, user_id"
+```
+
+```
+user_id             country_iso  failures
+──────────────────  ───────────  ────────
+005A00000000002AAA  NZ           2
+005A00000000003AAA               1
+```
+
+You get one row per user and country, busiest first. The fixture's first user failed twice
+with `Invalid Password`, both from NZ. The second failed once with
+`Failed: Computer Activation Required` and has no country: `country_iso` is NULL when
+Salesforce couldn't place the IP, and those failures group together on the blank row.
+`status <> 'Success'` also skips rows where `status` is NULL, so check for those if you
+need every non-success. To name a user, join `user_id` to `setup_changes.performed_by_id`;
+a user who never made a setup change has no name in the archive.
 
 ### Reading the raw payload
 

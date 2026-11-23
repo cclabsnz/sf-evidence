@@ -10,7 +10,7 @@
 # Environment:
 #   SF_EVIDENCE_TARGET_ORG  required  sf CLI alias or username of the authenticated org
 #   SF_EVIDENCE_ARCHIVE     optional  archive root, a git repository        (default: .)
-#   SF_EVIDENCE_SOURCES     optional  comma-separated sources       (default: audit-trail,limits)
+#   SF_EVIDENCE_SOURCES     optional  comma-separated sources       (default: audit-trail,login-history,limits)
 #   SF_EVIDENCE_SIGN        optional  "true" to sign each manifest commit   (default: false)
 #   SF_EVIDENCE_PUSH        optional  "false" to skip pushing to origin     (default: true)
 #   SF_EVIDENCE_BRANCH      optional  branch to push to from a detached HEAD (default: main)
@@ -30,7 +30,7 @@ set -uo pipefail
 
 org="${SF_EVIDENCE_TARGET_ORG:?set SF_EVIDENCE_TARGET_ORG to the sf alias of the authenticated org}"
 archive="${SF_EVIDENCE_ARCHIVE:-.}"
-sources="${SF_EVIDENCE_SOURCES:-audit-trail,limits}"
+sources="${SF_EVIDENCE_SOURCES:-audit-trail,login-history,limits}"
 sign="${SF_EVIDENCE_SIGN:-false}"
 push="${SF_EVIDENCE_PUSH:-true}"
 

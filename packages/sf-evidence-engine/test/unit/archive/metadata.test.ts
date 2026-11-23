@@ -23,7 +23,7 @@ const T2 = '2026-08-16T09:00:00.000Z';
 const args = (over: Partial<Parameters<typeof buildMetadataFiles>[0]> = {}) => ({
   orgInfo: INFO,
   instanceUrl: 'https://acme.my.salesforce.com',
-  apiVersion: '64.0',
+  apiVersion: '67.0',
   producer: PRODUCER,
   existing: { archive: null, org: null },
   now: T1,
@@ -61,7 +61,7 @@ describe('buildMetadataFiles', () => {
       instance: 'AP5',
       is_sandbox: false,
       instance_url: 'https://acme.my.salesforce.com',
-      api_version: '64.0',
+      api_version: '67.0',
       first_seen: T1,
     });
     expect(org.sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -162,28 +162,33 @@ describe('runCollect metadata', () => {
     ]);
     expect((await sink.listOrphans(ORG_ID)).map((o) => o.relPath)).toEqual([]);
     expect(result.metadata.written.sort()).toEqual(['archive.json', `org_id=${ORG_ID}/org.json`]);
+    // The first run is a 180-day backfill in 7-day rounds; only the first round carries metadata.
+    expect(result.manifests.length).toBeGreaterThan(1);
+    for (const m of result.manifests.slice(1)) {
+      expect((await sink.readManifest(ORG_ID, m.seq))!.metadata).toBeUndefined();
+    }
   });
 
   it('writes nothing new on an unchanged second run, and omits the metadata key', async () => {
     await run('Acme', T1);
-    await run('Acme', T2);
-    const second = (await sink.readManifest(ORG_ID, 2))!;
+    const result = await run('Acme', T2);
+    const second = (await sink.readManifest(ORG_ID, result.manifest.seq))!;
     expect(second.metadata).toBeUndefined();
   });
 
   it('rewrites org.json after a rename and keeps first_seen', async () => {
     await run('Acme', T1);
-    await run('Acme Holdings', T2);
+    const second = await run('Acme Holdings', T2);
     const org = JSON.parse(await readFile(join(root, `org_id=${ORG_ID}`, 'org.json'), 'utf8'));
     expect(org).toMatchObject({ name: 'Acme Holdings', first_seen: T1 });
-    expect((await sink.readManifest(ORG_ID, 2))!.metadata?.map((m) => m.path)).toEqual([
+    expect((await sink.readManifest(ORG_ID, second.manifests[0]!.seq))!.metadata?.map((m) => m.path)).toEqual([
       `org_id=${ORG_ID}/org.json`,
     ]);
   });
 
   it('still archives evidence and says so when the org record cannot be read', async () => {
     const result = await run('Acme', T1, true);
-    expect(result.manifest.seq).toBe(1);
+    expect(result.manifests[0]!.seq).toBe(1);
     expect(result.metadata.written).toEqual([]);
     expect(result.metadata.error).toMatch(/boom/);
     expect((await sink.readManifest(ORG_ID, 1))!.metadata).toBeUndefined();

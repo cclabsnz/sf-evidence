@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The two permissions sf evidence collect needs (README: "The permission you need").
+  The three permissions sf evidence collect needs (View Setup for Setup Audit Trail, Monitor Login History for LoginHistory) (README: "The permission you need").
   Deliberately absent: View All Data, Modify All Data, Manage Users.
   Add it to an sfdx project under force-app/main/default/permissionsets/, then assign it to
   the integration user and to the External Client App's pre-authorised permission sets.
 -->
 <PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
-    <description>Read-only access for sf-evidence: API access and View Setup and Configuration, for Setup Audit Trail and /limits. Grants no record access.</description>
+    <description>Read-only access for sf-evidence: API access, View Setup and Configuration, and Monitor Login History, for Setup Audit Trail, Login History and /limits. Grants no record access.</description>
     <hasActivationRequired>false</hasActivationRequired>
     <label>SF Evidence Reader</label>
     <userPermissions>
@@ -16,5 +16,9 @@
     <userPermissions>
         <enabled>true</enabled>
         <name>ViewSetup</name>
+    </userPermissions>
+    <userPermissions>
+        <enabled>true</enabled>
+        <name>MonitorLoginHistory</name>
     </userPermissions>
 </PermissionSet>

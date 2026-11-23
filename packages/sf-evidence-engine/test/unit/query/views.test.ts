@@ -20,8 +20,8 @@ function normaliseAccessors(expr: string): string {
 }
 
 describe('VIEWS', () => {
-  it('defines records, setup_changes and limit_samples, version 1', () => {
-    expect(VIEWS.map((v) => v.name)).toEqual(['records', 'setup_changes', 'limit_samples']);
+  it('defines records, setup_changes, limit_samples and login_history, version 1', () => {
+    expect(VIEWS.map((v) => v.name)).toEqual(['records', 'setup_changes', 'limit_samples', 'login_history']);
     for (const v of VIEWS) expect(v.version).toBe(1);
   });
 
@@ -40,6 +40,7 @@ describe('VIEWS', () => {
     expect(view('records').timeColumn).toBe('occurred_at_utc');
     expect(view('setup_changes').timeColumn).toBe('occurred_at_utc');
     expect(view('limit_samples').timeColumn).toBe('sampled_at_utc');
+    expect(view('login_history').timeColumn).toBe('occurred_at_utc');
     for (const v of VIEWS) {
       const col = v.columns.find((c) => c.name === v.timeColumn);
       expect(col?.type).toBe('TIMESTAMP');
@@ -84,6 +85,60 @@ describe('VIEWS', () => {
     expect([...view('records').sources].sort()).toEqual(['audit-trail', 'limits', 'login-history']);
     expect(view('setup_changes').sources).toEqual(['audit-trail']);
     expect(view('limit_samples').sources).toEqual(['limits']);
+    expect(view('login_history').sources).toEqual(['login-history']);
+  });
+
+  describe('login_history', () => {
+    const lh = (): ViewDefinition => view('login_history');
+    const payloadColumns: Array<[string, string]> = [
+      ['user_id', 'UserId'],
+      ['status', 'Status'],
+      ['login_type', 'LoginType'],
+      ['login_sub_type', 'LoginSubType'],
+      ['application', 'Application'],
+      ['browser', 'Browser'],
+      ['platform', 'Platform'],
+      ['source_ip', 'SourceIp'],
+      ['forwarded_for_ip', 'ForwardedForIp'],
+      ['country_iso', 'CountryIso'],
+      ['login_url', 'LoginUrl'],
+      ['api_type', 'ApiType'],
+      ['api_version', 'ApiVersion'],
+      ['auth_method_reference', 'AuthMethodReference'],
+      ['tls_protocol', 'TlsProtocol'],
+      ['auth_context_class_ref', 'AuthContextClassRef'],
+    ];
+
+    it('has exactly these columns, in this order', () => {
+      expect(lh().columns.map((c) => c.name)).toEqual([
+        'occurred_at_utc', 'occurred_at_local', 'user_id', 'status', 'login_type', 'login_sub_type',
+        'application', 'browser', 'platform', 'source_ip', 'forwarded_for_ip', 'country_iso', 'login_url',
+        'api_type', 'api_version', 'auth_method_reference', 'tls_protocol', 'auth_context_class_ref',
+        'source_id', 'org_id', 'org_label', 'collected_at_utc',
+      ]);
+      expect(lh().grain).toBe('One row per login attempt.');
+    });
+
+    it('reads time from occurred_at and every other payload column as VARCHAR from its field', () => {
+      const col = (n: string) => lh().columns.find((c) => c.name === n)!;
+      expect(col('occurred_at_utc').type).toBe('TIMESTAMP');
+      expect(col('occurred_at_utc').expr.duckdb).toBe("timezone('UTC', occurred_at)");
+      expect(col('occurred_at_local').type).toBe('TIMESTAMPTZ');
+      expect(col('occurred_at_local').expr.duckdb).toBe('occurred_at');
+      for (const [name, f] of payloadColumns) {
+        expect(col(name).type).toBe('VARCHAR');
+        expect(normaliseAccessors(col(name).expr.duckdb ?? '')).toBe(`payload.${f}`);
+      }
+    });
+
+    it('states its known gaps', () => {
+      expect(lh().knownGaps).toHaveLength(3);
+      const gaps = lh().knownGaps.join(' ');
+      expect(gaps).toMatch(/UserId/);
+      expect(gaps).toMatch(/setup_changes\.performed_by_id/);
+      expect(gaps).toMatch(/free text/);
+      expect(gaps).toMatch(/fieldsDropped/);
+    });
   });
 
   it('performed_by_id never references CreatedById outside a non-Login-As branch', () => {

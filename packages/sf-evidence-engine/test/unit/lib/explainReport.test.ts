@@ -50,7 +50,7 @@ describe('buildExplanation', () => {
 
   it('lists the API budget read collect issues for an event source, with when it is issued', () => {
     const budget = explanation().queries.filter(
-      (q) => q.scope === 'plugin' && q.soql === 'GET /services/data/v64.0/limits/',
+      (q) => q.scope === 'plugin' && q.soql === 'GET /services/data/v67.0/limits/',
     );
     expect(budget).toHaveLength(1);
     expect(budget[0]!.permission).toMatch(/View Setup and Configuration/);
@@ -81,7 +81,7 @@ describe('buildExplanation', () => {
     });
     const q = e.queries.find((x) => x.object === 'limits');
     expect(q).toBeDefined();
-    expect(q!.soql).toBe('GET /services/data/v64.0/limits/');
+    expect(q!.soql).toBe('GET /services/data/v67.0/limits/');
     expect(q!.scope).toBe('collector');
     expect(q!.permission).toMatch(/View Setup and Configuration/);
     expect(e.destinations[0]!.purpose).toMatch(/REST GET/);
@@ -268,5 +268,16 @@ describe('org destination wording', () => {
     });
     expect(e.destinations[0]!.purpose).toMatch(/SOQL/);
     expect(e.destinations[0]!.purpose).toMatch(/REST/);
+  });
+
+  it('lists the LoginHistory query, with its permission, for the default sources', () => {
+    const e = buildExplanation({
+      sources: ['audit-trail', 'login-history'],
+      sinks: [new LocalSink('/tmp/archive')],
+      instanceUrl: 'https://example.my.salesforce.com',
+    });
+    const q = e.queries.find((x) => x.object === 'LoginHistory');
+    expect(q).toBeDefined();
+    expect(q!.permission).toContain('MonitorLoginHistory');
   });
 });

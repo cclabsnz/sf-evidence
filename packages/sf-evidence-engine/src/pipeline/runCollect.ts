@@ -2,6 +2,7 @@ import { ArchiveReader } from '../archive/reader.js';
 import { DAY_MS, retentionStart as retentionStartOf, uncoveredIntervals } from '../archive/coverage.js';
 import { sha256Hex } from '../chain/hash.js';
 import { mergeWindows } from '../lib/windows.js';
+import { PERMISSION_ERROR_CODES } from '../lib/errors.js';
 import { buildBatch, manifestHash, PRODUCER } from '../chain/manifestBuilder.js';
 import { ARCHIVE_JSON_PATH, buildMetadataFiles, orgJsonPath } from '../archive/metadata.js';
 import { assertValidFloor, checkApiBudget } from './apiBudget.js';
@@ -11,11 +12,14 @@ import { hourWindow, toIsoMs } from '../lib/time.js';
 import { API_VERSION, resolveOrgInfo } from '../salesforce.js';
 import type { CollectionClockSource } from './collectionClock.js';
 import { GENESIS_PREV, type Degradation, type SourceStatus, type TimeWindow } from '../types/manifest.js';
-import type { CollectionOutcome } from '../types/collector.js';
+import type { Collector, CollectionOutcome } from '../types/collector.js';
+import { planRounds } from './rounds.js';
 import type { SourceId } from '../types/record.js';
 import type { OrphanFile, PreparedFile, Sink } from '../types/sink.js';
 import type { RestClient, SoqlClient } from '@cclabsnz/sf-core';
 import type { SourceBatchInput } from '../chain/manifestBuilder.js';
+
+export { planRounds, ROUND_MS, type RoundEntry, type RoundPlanInput } from './rounds.js';
 
 export interface RunCollectArgs {
   orgId: string;
@@ -103,6 +107,12 @@ export interface SinkResult {
    *
    * Collapsing the second case into the first is what made this pipeline announce that
    * nothing was archived over a complete batch.
+   *
+   * Across a run's commit rounds: `written` is true only when every round landed. A sink that
+   * fails a round is given none of the later ones (its chain would have a hole), and `error`
+   * names that round, e.g. `round 3 of 26 (seq 5): ...`; the rounds before it stay written.
+   * With `written: true`, `error` is the first anchoring failure. `commit` is the last
+   * round's commit, and `pushPending` is true when any round left one.
    */
   error?: string;
 }
@@ -122,7 +132,13 @@ export interface MetadataResult {
 export interface CollectResult {
   runId: string;
   orgId: string;
+  /** The last manifest this run built: `manifests.at(-1)`, the chain head it leaves. */
   manifest: { seq: number; hash: string; prev: string };
+  /**
+   * Every manifest this run built, in chain order: one per commit round (`ROUND_MS` of event
+   * time), so a long backfill writes several and a routine incremental run writes one.
+   */
+  manifests: Array<{ seq: number; hash: string; prev: string }>;
   sources: SourceResult[];
   sinks: SinkResult[];
   /**
@@ -145,7 +161,10 @@ export interface CollectResult {
   clock: CollectionClockSource;
   /** Why the org clock could not be read; present only when the host said so. */
   clockNote?: string;
-  /** True when any source is not `complete`, or any sink write failed; drives exit code 4. */
+  /**
+   * True when any source is not `complete` or carries a degradation, or any sink write failed;
+   * drives exit code 4.
+   */
   degraded: boolean;
 }
 
@@ -357,6 +376,296 @@ async function prepareMetadata(
   }
 }
 
+/** One source across the whole run: its plan, and what its rounds have added up to so far. */
+interface SourceRun {
+  source: SourceId;
+  collector: Collector;
+  plan: SourcePlan;
+  /** What this run queries: the plan, less any windows the API budget guard refused. */
+  windows: TimeWindow[];
+  /** Refused gap-repair windows; recorded in this source's last round. */
+  refused: Degradation[];
+  /** Set when the guard refused the whole plan: one degraded entry, in the last round. */
+  refusedAll?: Degradation;
+  apiBudgetChecked?: boolean;
+  apiBudgetNote?: string;
+  /** Ids collected by earlier windows and rounds of this run, for dedupe. */
+  seen: Set<string>;
+  /** Fields an earlier call had to drop; every later call starts without them. */
+  omitFields?: string[];
+  /**
+   * Set when a permission error stopped this source: it is not collected again this run, and
+   * the entry that recorded the denial spans the rest of its plan.
+   */
+  denied?: boolean;
+  /** The windows passed to `collect`, in order: what was actually queried. */
+  queried: TimeWindow[];
+  statuses: SourceStatus[];
+  entryWindows: TimeWindow[];
+  achieved: TimeWindow[];
+  fetched: number;
+  written: number;
+  deduped: number;
+  files: string[];
+  degradations: Degradation[];
+}
+
+/** One sink across the run's rounds. */
+interface SinkRun {
+  sink: Sink;
+  /** A sink that failed a round takes no later round: its chain would have a hole in it. */
+  dropped: boolean;
+  roundsWritten: number;
+  commit?: string;
+  pushPending?: boolean;
+  error?: string;
+}
+
+/**
+ * A source's status across rounds: `complete` only when every round was; `degraded` (or
+ * `failed`, when every round failed) when no round achieved anything; otherwise `partial`.
+ * The same reading `combineOutcomes` gives several windows of one round.
+ */
+function statusAcrossRounds(statuses: SourceStatus[]): SourceStatus {
+  if (statuses.every((s) => s === 'complete')) return 'complete';
+  if (statuses.every((s) => s === 'degraded' || s === 'failed')) {
+    return statuses.every((s) => s === 'failed') ? 'failed' : 'degraded';
+  }
+  return 'partial';
+}
+
+/**
+ * A field downgrade is windowless and holds for the whole run, so every later call repeats
+ * it. One copy per manifest, and one per source result, says everything the copies say.
+ */
+const isDowngrade = (d: Degradation): boolean =>
+  d.code === 'INVALID_FIELD' && d.window === undefined && (d.fieldsDropped?.length ?? 0) > 0;
+
+/** `ds` without any downgrade `already` (or an earlier entry of `ds`) records. */
+function withoutRepeatedDowngrade(already: Degradation[], ds: Degradation[]): Degradation[] {
+  let seen = already.some(isDowngrade);
+  return ds.filter((d) => {
+    if (!isDowngrade(d)) return true;
+    if (seen) return false;
+    seen = true;
+    return true;
+  });
+}
+
+/** Plans one source and runs the API budget guard over the plan, before any round. */
+async function planSourceRun(
+  args: RunCollectArgs,
+  source: SourceId,
+  now: Date,
+  summaries: Awaited<ReturnType<ArchiveReader['summarise']>>,
+): Promise<SourceRun> {
+  const collector = getCollector(source);
+  // A snapshot has no history to backfill or repair: the only thing it can collect is now,
+  // so `since`, `until`, `backfill` and prior coverage do not apply (SPEC.md §4.4).
+  const plan: SourcePlan =
+    collector.kind === 'snapshot'
+      ? { windows: [hourWindow(now)], incremental: null }
+      : planSource({
+          now,
+          since: args.since,
+          until: args.until,
+          backfill: args.backfill,
+          retentionDays: collector.retentionDays,
+          // Already clipped at each run's created_at by the reader, the same summary
+          // `status` assesses, so the planner and `status` agree on where coverage ends.
+          coverage: summaries.find((s) => s.source === source)?.coverage ?? [],
+        });
+  const guarded = collector.kind === 'snapshot' ? [] : guardedWindows(plan);
+
+  const run: SourceRun = {
+    source,
+    collector,
+    plan,
+    windows: plan.windows,
+    refused: [],
+    seen: new Set(),
+    queried: [],
+    statuses: [],
+    entryWindows: [],
+    achieved: [],
+    fetched: 0,
+    written: 0,
+    deduped: 0,
+    files: [],
+    degradations: [],
+  };
+
+  if (spanOf(guarded) > GUARDED_SPAN_MS) {
+    let verdict: Awaited<ReturnType<typeof checkApiBudget>> | undefined;
+    // Without a client, or when `/limits/` cannot be read, the budget is unknown. The run
+    // goes ahead, as it would have before the guard existed, and says so in the result.
+    // Refusing instead would let an unrelated `/limits/` failure block evidence collection.
+    if (args.rest) {
+      try {
+        verdict = await checkApiBudget(args.rest, args.apiFloor);
+      } catch (err) {
+        verdict = undefined;
+        run.apiBudgetNote = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      run.apiBudgetNote = 'no REST client was available to read GET /limits/.';
+    }
+    run.apiBudgetChecked = verdict !== undefined;
+    if (verdict && !verdict.ok) {
+      const remediation =
+        `Re-run when DailyApiRequests.Remaining is at least ${verdict.floor} (it is ${verdict.remaining} now), ` +
+        `or lower the floor with --api-floor <requests>.`;
+      const below = `DailyApiRequests.Remaining is ${verdict.remaining}, below the floor of ${verdict.floor}.`;
+
+      if (!plan.incremental) {
+        run.refusedAll = {
+          source,
+          code: 'API_BUDGET_FLOOR',
+          detail: `${below} The planned collection spans more than 7 days, so it was not started.`,
+          remediation,
+        };
+        run.windows = [];
+        return run;
+      }
+
+      // Only the repair is refused. The incremental window keeps the source current, and
+      // each refused window is named so the gap it leaves is explicit and re-collectable.
+      for (const window of guarded) {
+        run.refused.push({
+          source,
+          code: 'API_BUDGET_FLOOR',
+          detail:
+            `${below} The gap repair spans more than 7 days, so this window was not collected; ` +
+            'the incremental window was.',
+          remediation,
+          window,
+        });
+      }
+      run.windows = [plan.incremental];
+    }
+  }
+  return run;
+}
+
+/**
+ * Collects one source's pieces of one round, exactly as a whole run once collected a source,
+ * and adds what it found to the source's running totals. Returns the manifest entry and the
+ * degradations it carries.
+ */
+async function collectRoundEntry(
+  args: RunCollectArgs,
+  reader: ArchiveReader,
+  run: SourceRun,
+  windows: TimeWindow[],
+  isLastRound: boolean,
+  collectedAt: string,
+  /** This source's windows in later rounds, which a permission error leaves unqueried. */
+  later: TimeWindow[],
+): Promise<{ input: SourceBatchInput; degradations: Degradation[] }> {
+  const { source } = run;
+  if (run.refusedAll) {
+    const span = spanning(run.plan.windows);
+    run.statuses.push('degraded');
+    run.entryWindows.push(span);
+    run.degradations.push(run.refusedAll);
+    return {
+      input: { source, status: 'degraded', window: span, achieved: [], records: [] },
+      degradations: [run.refusedAll],
+    };
+  }
+
+  const perWindow: CollectionOutcome[] = [];
+  let denial: Degradation | undefined;
+  /** Where the denial applies from: its slice, or (a snapshot's, which has none) its window. */
+  let deniedFrom: TimeWindow | undefined;
+  let unqueried: TimeWindow[] = [];
+  for (const [i, window] of windows.entries()) {
+    // Dedupe reads only the month partitions this window touches, plus what earlier
+    // windows and rounds of this run already collected.
+    const known = await reader.knownSourceIds(args.orgId, source, window);
+    for (const id of run.seen) known.add(id);
+    const windowOutcome = await run.collector.collect(
+      { soql: args.soql, rest: args.rest, orgId: args.orgId, apiVersion: API_VERSION, collectedAt },
+      { window, knownSourceIds: known, ...(run.omitFields ? { omitFields: run.omitFields } : {}) },
+    );
+    for (const rec of windowOutcome.records) run.seen.add(rec.source_id);
+    // A field downgrade holds for the rest of the run, so the rejected query is issued once.
+    const dropped = windowOutcome.degradations.find(
+      (d) => d.code === 'INVALID_FIELD' && d.fieldsDropped && d.fieldsDropped.length > 0,
+    )?.fieldsDropped;
+    if (dropped) run.omitFields = dropped;
+    run.queried.push(window);
+    perWindow.push(windowOutcome);
+    // A missing permission will not be granted by another window: stop this source here.
+    denial = windowOutcome.degradations.find((d) => PERMISSION_ERROR_CODES.has(d.code));
+    if (denial) {
+      deniedFrom = denial.window ?? window;
+      unqueried = [...windows.slice(i + 1), ...later];
+      break;
+    }
+  }
+  let combined = combineOutcomes(perWindow);
+  if (denial) run.denied = true;
+  // With nothing left after it, the denial already says everything; otherwise it is widened.
+  if (denial && deniedFrom && unqueried.length > 0) {
+    // One entry, here, for the rest of the plan: its window spans every window this run will
+    // not query, `achieved` stays what was actually collected, and the one denial degradation
+    // covers from the denied slice to the end of the plan.
+    const to = [deniedFrom.to, ...unqueried.map((w) => w.to)].reduce((a, b) => (b > a ? b : a));
+    const stopped: Degradation = {
+      ...denial,
+      window: { from: deniedFrom.from, to },
+      detail:
+        `${denial.detail} Collection of ${source} stopped for the rest of this run: ` +
+        `nothing from ${deniedFrom.from} to ${to} was queried after this error.`,
+    };
+    combined = {
+      ...combined,
+      window: spanning([...windows, ...unqueried]),
+      degradations: combined.degradations.map((d) => (d === denial ? stopped : d)),
+    };
+  }
+  // A refused repair leaves part of the plan uncollected: the source's last round is never
+  // `complete`, and its window spans the refused windows, so they sit outside `achieved`. A
+  // denied source has no later round, so its refused windows are recorded with the denial.
+  const refused = isLastRound || denial ? run.refused : [];
+  const outcome: CollectionOutcome =
+    refused.length === 0
+      ? combined
+      : {
+          ...combined,
+          status: combined.status === 'complete' ? 'partial' : combined.status,
+          window: spanning([combined.window, ...refused.map((d) => d.window!)]),
+          degradations: [...refused, ...combined.degradations],
+        };
+  const degradations = withoutRepeatedDowngrade([], outcome.degradations);
+
+  run.statuses.push(outcome.status);
+  run.entryWindows.push(outcome.window);
+  run.achieved.push(...outcome.achieved);
+  run.fetched += outcome.fetched;
+  run.written += outcome.records.length;
+  run.deduped += outcome.deduped;
+  run.degradations.push(...withoutRepeatedDowngrade(run.degradations, degradations));
+
+  return {
+    input: {
+      source,
+      status: outcome.status,
+      window: outcome.window,
+      achieved: outcome.achieved,
+      records: outcome.records,
+    },
+    degradations,
+  };
+}
+
+/**
+ * Collection is committed in rounds of `ROUND_MS` of event time: each round is collected,
+ * built into one manifest and written to every sink before the next round is collected. A
+ * long backfill therefore holds one round's records in memory, and an interrupted one keeps
+ * every round it committed; the next run plans from where they end.
+ */
 export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
   const canonical = args.sinks.filter((s) => s.capabilities.canonical);
   if (canonical.length === 0) {
@@ -371,242 +680,173 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
   const runId = newRunId(now.getTime());
 
   // Chain position comes from the first canonical sink; every canonical sink receives the
-  // same manifest, so their chains stay identical.
+  // same manifests, so their chains stay identical.
   const primary = canonical[0]!;
   const reader = new ArchiveReader(primary);
   const head = await primary.head(args.orgId);
-  const seq = (head?.seq ?? 0) + 1;
-  const prev = head?.manifest_hash ?? GENESIS_PREV;
-
-  const outcomes: SourceBatchInput[] = [];
-  const degradations: Degradation[] = [];
-  const sourceResults: SourceResult[] = [];
 
   // Not persisted here: a dry run must leave `_state/` untouched, and the cache is refreshed
-  // only after a canonical sink has accepted the batch.
+  // only after a canonical sink has accepted a batch.
   const summaries = await reader.summarise(args.orgId, { persist: false });
 
-  // Before the loop, and outside the guard's try/catch below: a bad floor is a usage error,
-  // not an unreadable budget, and must not be reported as "not checked".
+  // Before planning, and outside the guard's try/catch: a bad floor is a usage error, not an
+  // unreadable budget, and must not be reported as "not checked".
   assertValidFloor(args.apiFloor);
 
-  for (const source of args.sources) {
-    const collector = getCollector(source);
-    // A snapshot has no history to backfill or repair: the only thing it can collect is now,
-    // so `since`, `until`, `backfill` and prior coverage do not apply (SPEC.md §4.4).
-    const plan: SourcePlan =
-      collector.kind === 'snapshot'
-        ? { windows: [hourWindow(now)], incremental: null }
-        : planSource({
-            now,
-            since: args.since,
-            until: args.until,
-            backfill: args.backfill,
-            retentionDays: collector.retentionDays,
-            // Already clipped at each run's created_at by the reader, the same summary
-            // `status` assesses, so the planner and `status` agree on where coverage ends.
-            coverage: summaries.find((s) => s.source === source)?.coverage ?? [],
-          });
-    const guarded = collector.kind === 'snapshot' ? [] : guardedWindows(plan);
+  const runs: SourceRun[] = [];
+  for (const source of args.sources) runs.push(await planSourceRun(args, source, now, summaries));
+  const bySource = new Map(runs.map((r) => [r.source, r]));
 
-    let windows = plan.windows;
-    const refused: Degradation[] = [];
-    let apiBudgetChecked: boolean | undefined;
-    let apiBudgetNote: string | undefined;
-    if (spanOf(guarded) > GUARDED_SPAN_MS) {
-      let verdict: Awaited<ReturnType<typeof checkApiBudget>> | undefined;
-      // Without a client, or when `/limits/` cannot be read, the budget is unknown. The run
-      // goes ahead, as it would have before the guard existed, and says so in the result.
-      // Refusing instead would let an unrelated `/limits/` failure block evidence collection.
-      if (args.rest) {
-        try {
-          verdict = await checkApiBudget(args.rest, args.apiFloor);
-        } catch (err) {
-          verdict = undefined;
-          apiBudgetNote = err instanceof Error ? err.message : String(err);
-        }
-      } else {
-        apiBudgetNote = 'no REST client was available to read GET /limits/.';
-      }
-      apiBudgetChecked = verdict !== undefined;
-      if (verdict && !verdict.ok) {
-        const remediation =
-          `Re-run when DailyApiRequests.Remaining is at least ${verdict.floor} (it is ${verdict.remaining} now), ` +
-          `or lower the floor with --api-floor <requests>.`;
-        const below = `DailyApiRequests.Remaining is ${verdict.remaining}, below the floor of ${verdict.floor}.`;
-
-        if (!plan.incremental) {
-          const span = spanning(plan.windows);
-          const degradation: Degradation = {
-            source,
-            code: 'API_BUDGET_FLOOR',
-            detail: `${below} The planned collection spans more than 7 days, so it was not started.`,
-            remediation,
-          };
-          outcomes.push({ source, status: 'degraded', window: span, achieved: [], records: [] });
-          degradations.push(degradation);
-          sourceResults.push({
-            source,
-            status: 'degraded',
-            window: span,
-            queried: [],
-            achieved: [],
-            recordsFetched: 0,
-            recordsWritten: 0,
-            recordsDeduped: 0,
-            files: [],
-            degradations: [degradation],
-            apiBudgetChecked,
-          });
-          continue;
-        }
-
-        // Only the repair is refused. The incremental window keeps the source current, and
-        // each refused window is named so the gap it leaves is explicit and re-collectable.
-        for (const window of guarded) {
-          refused.push({
-            source,
-            code: 'API_BUDGET_FLOOR',
-            detail:
-              `${below} The gap repair spans more than 7 days, so this window was not collected; ` +
-              'the incremental window was.',
-            remediation,
-            window,
-          });
-        }
-        windows = [plan.incremental];
-      }
-    }
-
-    const perWindow: CollectionOutcome[] = [];
-    const seenThisRun = new Set<string>();
-    for (const window of windows) {
-      // Dedupe reads only the month partitions this window touches, plus what earlier
-      // windows of this run already collected.
-      const known = await reader.knownSourceIds(args.orgId, source, window);
-      for (const id of seenThisRun) known.add(id);
-      const windowOutcome = await collector.collect(
-        { soql: args.soql, rest: args.rest, orgId: args.orgId, apiVersion: API_VERSION, collectedAt },
-        { window, knownSourceIds: known },
-      );
-      for (const rec of windowOutcome.records) seenThisRun.add(rec.source_id);
-      perWindow.push(windowOutcome);
-    }
-    const combined = combineOutcomes(perWindow);
-    // A refused repair leaves part of the plan uncollected: never `complete`, and the entry's
-    // window spans the plan, so the refused windows sit inside it and outside `achieved`.
-    const outcome: CollectionOutcome =
-      refused.length === 0
-        ? combined
-        : {
-            ...combined,
-            status: combined.status === 'complete' ? 'partial' : combined.status,
-            window: spanning(plan.windows),
-            degradations: [...refused, ...combined.degradations],
-          };
-
-    outcomes.push({
-      source,
-      status: outcome.status,
-      window: outcome.window,
-      achieved: outcome.achieved,
-      records: outcome.records,
-    });
-    degradations.push(...outcome.degradations);
-
-    sourceResults.push({
-      source,
-      status: outcome.status,
-      window: outcome.window,
-      queried: windows,
-      achieved: outcome.achieved,
-      ...(collector.kind === 'snapshot' && outcome.fetched > 0 ? { sampledAt: collectedAt } : {}),
-      recordsFetched: outcome.fetched,
-      recordsWritten: outcome.records.length,
-      recordsDeduped: outcome.deduped,
-      files: [],
-      degradations: outcome.degradations,
-      ...(apiBudgetChecked === undefined ? {} : { apiBudgetChecked }),
-      ...(apiBudgetNote === undefined ? {} : { apiBudgetNote }),
-    });
-  }
+  const rounds = planRounds(
+    runs
+      .filter((r) => !r.refusedAll)
+      .map((r) => ({ source: r.source, kind: r.collector.kind, windows: r.windows })),
+  );
+  // A wholly refused source has nothing to collect; its entry goes in the last round.
+  for (const r of runs) if (r.refusedAll) rounds.at(-1)!.push({ source: r.source, windows: [] });
+  const order = new Map(args.sources.map((s, i) => [s, i]));
+  for (const round of rounds) round.sort((a, b) => order.get(a.source)! - order.get(b.source)!);
+  const lastRound = new Map<SourceId, number>();
+  rounds.forEach((round, k) => round.forEach((e) => lastRound.set(e.source, k)));
 
   const metadata = await prepareMetadata(args, canonical, collectedAt);
-
-  const batch = buildBatch({
-    orgId: args.orgId,
-    runId,
-    createdAt: collectedAt,
-    collectedAt,
-    prevManifestHash: prev,
-    seq,
-    outcomes,
-    degradations,
-    metadata: metadata.files,
-  });
-
-  for (const result of sourceResults) {
-    result.files =
-      batch.manifest.sources.find((s) => s.source === result.source)?.files.map((f) => f.path) ?? [];
-  }
-
-  const hash = manifestHash(batch.manifest);
   const orphansFound = await primary.listOrphans(args.orgId);
-  const sinkResults: SinkResult[] = [];
 
-  if (!args.dryRun) {
-    for (const sink of args.sinks) {
-      // Per-sink isolation (SPEC.md §8.2). A sink that throws leaves its own chain at its
-      // previous head and is reported as failed; it does not abort the run and discard a
-      // batch the other sinks already accepted. The whole run only fails when no canonical
-      // sink took it, which is the case where nothing was archived anywhere.
-      try {
-        const out = await sink.putBatch(batch);
-        sinkResults.push({
-          id: sink.id,
-          written: out.written,
-          commit: out.commit,
-          pushPending: out.pushPending,
-          // A failed anchoring commit is not a failed write: the batch is on disk. It is
-          // still recorded, and still makes the run degraded, because the sink did not do
-          // everything it was asked to.
-          error: out.anchorError,
-        });
-      } catch (err) {
-        sinkResults.push({
-          id: sink.id,
-          written: false,
-          error: err instanceof Error ? err.message : String(err),
-        });
+  const sinkRuns: SinkRun[] = args.sinks.map((sink) => ({ sink, dropped: false, roundsWritten: 0 }));
+  const manifests: Array<{ seq: number; hash: string; prev: string }> = [];
+  let seq = (head?.seq ?? 0) + 1;
+  let prev = head?.manifest_hash ?? GENESIS_PREV;
+  let primaryWrote = false;
+
+  /** A source's windows in the rounds after round k. */
+  const laterWindows = (source: SourceId, k: number): TimeWindow[] =>
+    rounds.slice(k + 1).flatMap((r) => r.filter((e) => e.source === source).flatMap((e) => e.windows));
+  /** Whether a round after k still has a source to collect. */
+  const laterRoundLive = (k: number): boolean =>
+    rounds.slice(k + 1).some((r) => r.some((e) => !bySource.get(e.source)!.denied));
+  /** Denial entries held back from a round that had nothing else, for the next written round. */
+  let carried: { outcomes: SourceBatchInput[]; degradations: Degradation[] } | undefined;
+
+  try {
+    for (const [k, round] of rounds.entries()) {
+      // A source a permission error stopped is not collected again: its denial entry already
+      // spans the rest of its plan. A round left with nothing to collect writes no manifest.
+      const live = round.filter((e) => !bySource.get(e.source)!.denied);
+      if (live.length === 0) continue;
+
+      const outcomes: SourceBatchInput[] = [...(carried?.outcomes ?? [])];
+      const degradations: Degradation[] = [...(carried?.degradations ?? [])];
+      let onlyDenials = true;
+      for (const entry of live) {
+        const run = bySource.get(entry.source)!;
+        const collected = await collectRoundEntry(
+          args,
+          reader,
+          run,
+          entry.windows,
+          lastRound.get(entry.source) === k,
+          collectedAt,
+          laterWindows(entry.source, k),
+        );
+        outcomes.push(collected.input);
+        degradations.push(...collected.degradations);
+        if (!run.denied || collected.input.records.length > 0 || collected.input.achieved.length > 0) {
+          onlyDenials = false;
+        }
       }
-    }
+      // A round that collected nothing but a denial is not worth a manifest of its own while a
+      // later round will be written: its entry rides with that round instead. So an org that
+      // lacks a source's permission gets the manifests its other sources need, and the denial
+      // once, not a manifest per round of a plan the source will never collect.
+      if (onlyDenials && laterRoundLive(k)) {
+        carried = { outcomes, degradations };
+        continue;
+      }
+      carried = undefined;
+      outcomes.sort((a, b) => order.get(a.source)! - order.get(b.source)!);
+      const built = manifests.length;
 
-    const canonicalWrote = args.sinks.some(
-      (sink, i) => sink.capabilities.canonical && sinkResults[i]!.written,
-    );
-    if (!canonicalWrote) {
-      const detail = sinkResults
-        .filter((r) => r.error)
-        .map((r) => `${r.id}: ${r.error}`)
-        .join('; ');
-      // Deliberately says "did not complete", not "nothing was archived". Sinks write
-      // record files, then the manifest, then head — so a failure partway through leaves
-      // real files behind, and this function cannot tell how far each sink got. Claiming
-      // an empty archive would send the operator looking for data that may be sitting
-      // there, and would be the same overclaim in the opposite direction.
-      throw new Error(
-        'No canonical sink completed this run. Files may already be on disk: sinks write ' +
-          'record files, then the manifest, then the head pointer, so a failure partway ' +
-          'through leaves what was written before it. Nothing here can tell you how far ' +
-          `each sink got — run \`sf evidence verify --org-id ${args.orgId}\` to see what ` +
-          `the archive actually holds before retrying. ${detail}`,
-      );
-    }
+      const batch = buildBatch({
+        orgId: args.orgId,
+        runId,
+        createdAt: collectedAt,
+        collectedAt,
+        prevManifestHash: prev,
+        seq,
+        outcomes,
+        degradations,
+        // Metadata describes the archive, not a round: it rides with the first one only.
+        ...(built === 0 ? { metadata: metadata.files } : { part: `r${String(built + 1).padStart(2, '0')}` }),
+      });
+      for (const s of batch.manifest.sources) {
+        bySource.get(s.source)!.files.push(...s.files.map((f) => f.path));
+      }
+      const hash = manifestHash(batch.manifest);
 
-    // Refresh `_state/coverage.json` from the sink the reader reads, once it holds this
-    // batch. Best-effort: the cache only makes the next run faster, and a failure here must
-    // not report an archived batch as a failed run.
-    if (sinkResults[args.sinks.indexOf(primary)]?.written) {
+      if (!args.dryRun) {
+        const label = rounds.length === 1 ? '' : `round ${k + 1} of ${rounds.length} (seq ${seq}): `;
+        const failures: string[] = [];
+        let canonicalWrote = false;
+        for (const sr of sinkRuns) {
+          if (sr.dropped) continue;
+          // Per-sink isolation (SPEC.md §8.2). A sink that throws leaves its own chain at its
+          // previous head and is reported as failed; it does not abort the run and discard a
+          // batch the other sinks already accepted. The whole run only fails when no
+          // canonical sink took a round, which is the case where it was archived nowhere.
+          const drop = (message: string): void => {
+            sr.dropped = true;
+            const earlier = sr.roundsWritten > 0 ? '; earlier rounds were written to this sink' : '';
+            sr.error = `${label}${message}${earlier}`;
+            failures.push(`${sr.sink.id}: ${sr.error}`);
+          };
+          try {
+            const out = await sr.sink.putBatch(batch);
+            if (!out.written) {
+              drop(out.anchorError ?? 'the sink reported the batch was not written');
+              continue;
+            }
+            sr.roundsWritten += 1;
+            if (sr.sink.capabilities.canonical) canonicalWrote = true;
+            if (sr.sink === primary) primaryWrote = true;
+            // The last round's commit, or none: an earlier round's commit must not read as
+            // anchoring the head round when that round's commit failed.
+            sr.commit = out.commit;
+            if (out.pushPending) sr.pushPending = true;
+            // A failed anchoring commit is not a failed write: the batch is on disk. It is
+            // still recorded, and still makes the run degraded, because the sink did not do
+            // everything it was asked to.
+            if (out.anchorError !== undefined && sr.error === undefined) sr.error = `${label}${out.anchorError}`;
+          } catch (err) {
+            drop(err instanceof Error ? err.message : String(err));
+          }
+        }
+
+        if (!canonicalWrote) {
+          // Deliberately says "did not complete", not "nothing was archived". Sinks write
+          // record files, then the manifest, then head — so a failure partway through leaves
+          // real files behind, and this function cannot tell how far each sink got. Claiming
+          // an empty archive would send the operator looking for data that may be sitting
+          // there, and would be the same overclaim in the opposite direction. Rounds before
+          // this one stay written.
+          throw new Error(
+            'No canonical sink completed this run. Files may already be on disk: sinks write ' +
+              'record files, then the manifest, then the head pointer, so a failure partway ' +
+              'through leaves what was written before it. Nothing here can tell you how far ' +
+              `each sink got — run \`sf evidence verify --org-id ${args.orgId}\` to see what ` +
+              `the archive actually holds before retrying. ${failures.join('; ')}`,
+          );
+        }
+      }
+
+      manifests.push({ seq, hash, prev });
+      prev = hash;
+      seq += 1;
+    }
+  } finally {
+    // Refresh `_state/coverage.json` from the sink the reader reads, once it holds this run's
+    // last written round, also when a later round failed. Best-effort: the cache only makes
+    // the next run faster, and a failure here must not report an archived batch as a failed run.
+    if (primaryWrote) {
       try {
         await reader.summarise(args.orgId);
       } catch {
@@ -615,10 +855,44 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
     }
   }
 
+  const sourceResults: SourceResult[] = runs.map((run) => ({
+    source: run.source,
+    status: statusAcrossRounds(run.statuses),
+    window: spanning(run.entryWindows),
+    // A denied source stopped partway: only what it actually asked the org for.
+    queried: run.denied ? mergeWindows(run.queried) : run.windows,
+    achieved: mergeWindows(run.achieved),
+    ...(run.collector.kind === 'snapshot' && run.fetched > 0 ? { sampledAt: collectedAt } : {}),
+    recordsFetched: run.fetched,
+    recordsWritten: run.written,
+    recordsDeduped: run.deduped,
+    files: run.files,
+    degradations: run.degradations,
+    ...(run.apiBudgetChecked === undefined ? {} : { apiBudgetChecked: run.apiBudgetChecked }),
+    ...(run.apiBudgetNote === undefined ? {} : { apiBudgetNote: run.apiBudgetNote }),
+  }));
+
+  const sinkResults: SinkResult[] = args.dryRun
+    ? []
+    : sinkRuns.map((sr) => {
+        // Every manifest built, not every planned round: a round left with nothing to collect
+        // is not written.
+        const written = !sr.dropped && sr.roundsWritten === manifests.length;
+        return {
+          id: sr.sink.id,
+          written,
+          // An earlier round's commit must not read as anchoring a run the sink did not take.
+          commit: written ? sr.commit : undefined,
+          pushPending: sr.pushPending,
+          error: sr.error,
+        };
+      });
+
   return {
     runId,
     orgId: args.orgId,
-    manifest: { seq, hash, prev },
+    manifest: manifests.at(-1)!,
+    manifests,
     sources: sourceResults,
     sinks: sinkResults,
     orphansFound,
@@ -632,8 +906,11 @@ export async function runCollect(args: RunCollectArgs): Promise<CollectResult> {
     ...(args.clockNote === undefined ? {} : { clockNote: args.clockNote }),
     degraded:
       sourceResults.some((s) => s.status !== 'complete') ||
-      // Both sink failure shapes count: a sink that took nothing, and a sink that took the
-      // batch but could not finish anchoring it.
+      // A complete source can still carry a degradation that applies to the whole source,
+      // such as login-history dropping fields the org rejected: the run is not full fidelity.
+      sourceResults.some((s) => s.degradations.length > 0) ||
+      // Both sink failure shapes count: a sink that took nothing (or not every round), and a
+      // sink that took the batch but could not finish anchoring it.
       sinkResults.some((s) => !s.written || s.error !== undefined),
   };
 }

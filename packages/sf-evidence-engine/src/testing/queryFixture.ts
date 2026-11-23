@@ -5,6 +5,8 @@ import { LocalSink } from '../sinks/local.js';
 import { absoluteRecordPath } from '../sinks/layout.js';
 import { GENESIS_PREV } from '../types/manifest.js';
 import { canonicalBytes } from '../chain/canonical.js';
+import { normaliseLoginHistoryRow } from '../collectors/normalise.js';
+import { loginHistoryFields } from '../collectors/loginHistory.js';
 import type { NormalisedRecord } from '../types/record.js';
 
 /**
@@ -31,6 +33,24 @@ export const FIXTURE = {
   },
   /** Archive-relative path of the one file no manifest references, in org A. */
   orphanRelPath: 'org_id=00D5j000000AbCdEAK/source=audit-trail/year=2026/month=08/part-orphan.ndjson',
+  /**
+   * Org A's login attempts, all in October 2026 (so August-based counts are unchanged): a
+   * success, two failures by one user from NZ, and a failure with no country or forwarded IP.
+   * `statusCounts` is `SELECT status, count(*) ... GROUP BY ALL ORDER BY 1`.
+   */
+  login: {
+    ids: {
+      ok: '0YaA00000000001AAA',
+      bad1: '0YaA00000000002AAA',
+      bad2: '0YaA00000000003AAA',
+      noCountry: '0YaA00000000004AAA',
+    },
+    statusCounts: [
+      ['Failed: Computer Activation Required', 1],
+      ['Invalid Password', 2],
+      ['Success', 1],
+    ],
+  },
   limits: {
     occurredAt: '2026-11-17T08:00:00.000Z',
     sampledAt: '2026-11-17T08:00:12.482Z',
@@ -131,6 +151,36 @@ function limitsRecord(): NormalisedRecord {
   };
 }
 
+interface LoginRow {
+  id: string;
+  at: string;
+  user: string;
+  status: string;
+  ip: string;
+  country: string | null;
+  forwarded: string | null;
+}
+
+const LOGINS: LoginRow[] = [
+  { id: FIXTURE.login.ids.ok, at: '2026-10-05T01:15:00.000Z', user: '005A00000000001AAA', status: 'Success', ip: '192.0.2.10', country: 'NZ', forwarded: '198.51.100.7' },
+  { id: FIXTURE.login.ids.bad1, at: '2026-10-05T03:00:00.000Z', user: '005A00000000002AAA', status: 'Invalid Password', ip: '192.0.2.20', country: 'NZ', forwarded: null },
+  { id: FIXTURE.login.ids.bad2, at: '2026-10-07T21:30:00.000Z', user: '005A00000000002AAA', status: 'Invalid Password', ip: '192.0.2.21', country: 'NZ', forwarded: null },
+  { id: FIXTURE.login.ids.noCountry, at: '2026-10-09T10:00:00.000Z', user: '005A00000000003AAA', status: 'Failed: Computer Activation Required', ip: '203.0.113.9', country: null, forwarded: null },
+];
+
+function loginRecord(r: LoginRow): NormalisedRecord {
+  return normaliseLoginHistoryRow(
+    {
+      Id: r.id, LoginTime: r.at, UserId: r.user, Status: r.status, LoginType: 'Application',
+      LoginSubType: 'Other Apex API', Application: 'Fixture App', Browser: 'Unknown', Platform: 'Unknown',
+      SourceIp: r.ip, CountryIso: r.country, LoginUrl: 'fixture.my.salesforce.com', ApiType: 'SOAP Enterprise',
+      ApiVersion: '64.0', TlsProtocol: 'TLS 1.3', ForwardedForIp: r.forwarded,
+    },
+    { orgId: FIXTURE.orgA, collectedAt: COLLECTED_AT, apiVersion: API_VERSION },
+    loginHistoryFields('67.0'),
+  );
+}
+
 const WINDOW = { from: '2026-02-16T00:00:00.000Z', to: COLLECTED_AT };
 
 /**
@@ -160,6 +210,9 @@ export async function writeQueryFixture(root: string): Promise<{ orgIds: [string
             achieved: [{ from: FIXTURE.limits.occurredAt, to: '2026-11-17T09:00:00.000Z' }],
             records: [limitsRecord()],
           }]
+        : []),
+      ...(org.first
+        ? [{ source: 'login-history' as const, status: 'complete' as const, window: WINDOW, achieved: [WINDOW], records: LOGINS.map(loginRecord) }]
         : []),
     ];
     // Both orgs share one archive.json; only the first batch writes it (it is absent until then).

@@ -1,6 +1,6 @@
 {
   "name": "@cclabsnz/sf-evidence",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Read-only Salesforce audit-data archival for the sf CLI: extracts Setup Audit Trail to a hash-chained, verifiable archive you own.",
   "license": "Apache-2.0",
   "author": "CloudCounsel Limited",

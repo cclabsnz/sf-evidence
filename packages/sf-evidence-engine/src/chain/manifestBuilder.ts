@@ -45,6 +45,8 @@ export interface BuildBatchArgs {
   degradations: Degradation[];
   /** archive.json / org.json to write with this batch; they ride in `files` and the manifest. */
   metadata?: PreparedFile[];
+  /** Record file name suffix for a run's later commit rounds; see `RecordPathArgs.part`. */
+  part?: string;
 }
 
 /** Deterministic ordering: this is what makes the Merkle root reproducible. */
@@ -90,6 +92,7 @@ export function buildBatch(args: BuildBatchArgs): PreparedBatch {
         occurredAt: monthRecords[0]!.occurred_at,
         collectedAt: args.collectedAt,
         runId: args.runId,
+        part: args.part,
       });
       const digest = `sha256:${sha256Hex(content)}`;
       files.push({ relPath, bytes: content, sha256: digest });

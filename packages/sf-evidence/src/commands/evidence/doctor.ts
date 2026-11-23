@@ -1,5 +1,5 @@
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
-import { Org } from '@salesforce/core';
+import { Org, type Connection } from '@salesforce/core';
 import {
   doctorExitCode,
   formatChecks,
@@ -8,7 +8,7 @@ import {
   type Check,
   type DoctorEnv,
 } from '@cclabsnz/sf-evidence-engine';
-import { DEFAULT_ARCHIVE, resolveSink } from '@cclabsnz/sf-evidence-engine';
+import { API_VERSION, DEFAULT_ARCHIVE, resolveSink } from '@cclabsnz/sf-evidence-engine';
 import { gitConfig, readVersions, which } from '../../lib/doctorEnv.js';
 import { readOrgClock } from '../../lib/orgClock.js';
 
@@ -123,15 +123,25 @@ Exit codes: 0 all ok · 4 any warning · 1 any failure.`;
     return rows;
   }
 
-  /** One-row read of LoginHistory over the connection doctor builds for --target-org. */
+  private connections = new Map<string, Promise<Connection>>();
+
+  /** One connection per --target-org, at the API version collect uses, shared by every org check. */
+  protected connect(aliasOrUsername: string): Promise<Connection> {
+    let conn = this.connections.get(aliasOrUsername);
+    if (!conn) {
+      conn = Org.create({ aliasOrUsername }).then((org) => org.getConnection(API_VERSION));
+      this.connections.set(aliasOrUsername, conn);
+    }
+    return conn;
+  }
+
+  /** One-row read of LoginHistory, at the API version collect will query it with. */
   protected async probeLoginHistory(aliasOrUsername: string): Promise<void> {
-    const org = await Org.create({ aliasOrUsername });
-    await org.getConnection().query('SELECT Id FROM LoginHistory LIMIT 1');
+    await (await this.connect(aliasOrUsername)).query('SELECT Id FROM LoginHistory LIMIT 1');
   }
 
   /** The only place doctor resolves an org; reached only from an explicit --target-org. */
   protected async orgClock(aliasOrUsername: string): Promise<Date> {
-    const org = await Org.create({ aliasOrUsername });
-    return readOrgClock(org.getConnection());
+    return readOrgClock(await this.connect(aliasOrUsername));
   }
 }

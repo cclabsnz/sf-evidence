@@ -10,7 +10,8 @@ import EvidenceVerify from '../../../src/commands/evidence/verify.js';
 import EvidenceExplain from '../../../src/commands/evidence/explain.js';
 import EvidenceCollect from '../../../src/commands/evidence/collect.js';
 import EvidenceDoctor from '../../../src/commands/evidence/doctor.js';
-import { LocalSink } from '@cclabsnz/sf-evidence-engine';
+import { Org } from '@salesforce/core';
+import { API_VERSION, LocalSink } from '@cclabsnz/sf-evidence-engine';
 import { buildBatch } from '@cclabsnz/sf-evidence-engine';
 import { EXIT } from '@cclabsnz/sf-evidence-engine';
 import { GENESIS_PREV } from '@cclabsnz/sf-evidence-engine';
@@ -347,6 +348,22 @@ describe('sf evidence commands', () => {
         expect(spy).toHaveBeenCalledWith('prod');
       } finally {
         spy.mockRestore();
+      }
+    });
+
+    it('resolves the org once and runs its checks on a connection at the collector API version', async () => {
+      const query = jest.fn(async () => ({ records: [] }));
+      const getConnection = jest.fn(() => ({ query, request: jest.fn(async () => undefined) }));
+      const create = jest.spyOn(Org, 'create').mockResolvedValue({ getConnection } as never);
+      try {
+        // The fake connection has no transport, so the clock row warns; doctor still finishes.
+        await capture(new EvidenceDoctor(['--archive', root, '--target-org', 'prod'], config)).run();
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(getConnection).toHaveBeenCalledTimes(1);
+        expect(getConnection).toHaveBeenCalledWith(API_VERSION);
+        expect(query).toHaveBeenCalledWith('SELECT Id FROM LoginHistory LIMIT 1');
+      } finally {
+        create.mockRestore();
       }
     });
 

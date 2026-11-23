@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-11-24)
 
 - Upgrade note: login history is now collected by default, so the default sources are
   `audit-trail,login-history`. It needs the **Monitor Login History** permission

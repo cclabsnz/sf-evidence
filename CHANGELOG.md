@@ -11,13 +11,20 @@
   `login-history` to it. `sf evidence doctor --target-org` now has a `Login History access`
   row that tells you whether the permission is missing.
 - New source, `login-history`: the `LoginHistory` object, with a 180-day backfill on the
-  first run and all 25 fields. Fields that need a newer API version are dropped, with the
-  source marked partial, when the org is on an older one. Every request now uses API version
-  67.0 (it was 64.0), for every source. Each record still states the version it came from in
-  `api_version`.
+  first run and all 25 fields. If the org rejects ForwardedForIp, AuthMethodReference or
+  AuthContextClassRef at v67.0, they are dropped for the rest of the run. The source is still
+  `complete`, the manifest records an `INVALID_FIELD` degradation listing the dropped fields,
+  and `collect` exits 4. Every request now uses API version 67.0 (it was 64.0), for every
+  source. Each record still states the version it came from in `api_version`.
 - Collection is committed in rounds of 7 days. A first backfill on one org writes one
   manifest per 7 days (about 26 for 180 days), and the record files of later rounds get an
   `-rNN` suffix. Daily runs still write one manifest.
+- A source the running user cannot read (a missing permission, or an object the org doesn't
+  expose to them) is queried once per run. The first refusal stops that source for the rest
+  of the run, and one degraded entry records it over the whole remaining window. So an org
+  without **Monitor Login History** whose audit trail is up to date still writes one
+  manifest per daily run, recording the login-history denial once, instead of 26 degraded
+  manifests.
 - `sf evidence query --view login_history` returns one row per login attempt.
   `docs/query-views.md` lists the columns.
 - `explain` default sources now match `collect`.
@@ -28,6 +35,20 @@
   resumes without the API-budget check, and the remainder is planned as a normal incremental
   window.
 - All three packages release at 0.3.0, and the plugins depend on the engine at `^0.3.0`.
+  The GitHub Actions and Azure DevOps templates now pin `SF_EVIDENCE_VERSION` to 0.3.0
+  (they pinned 0.1.0, which can't collect login history).
+
+### Fixes
+
+- Permission errors, query timeouts and field rejections from Salesforce are now
+  recognised. Before, a missing permission made `collect` fail instead of exiting 4 and
+  continuing with the other sources, and a timed-out slice wasn't split. This affected 0.1.0
+  and 0.2.0.
+- A query returning more than 10,000 rows in one time slice is now split instead of
+  silently cut short. Before, the rows past 10,000 were dropped and the slice was still
+  recorded as covered. A slice that's still too big at one hour is recorded as a
+  `QUERY_TRUNCATED` degradation with its bounds, and isn't counted as covered. This affected
+  0.1.0 and 0.2.0.
 
 ## 0.2.0 (2026-11-19)
 

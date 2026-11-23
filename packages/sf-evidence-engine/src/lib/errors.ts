@@ -22,7 +22,7 @@ const REMEDIATION: Record<string, (permission: string) => string> = {
   INVALID_TYPE: (p) =>
     `The object is not available in this org or is not visible to the running user. Confirm the org edition and the ${p}.`,
   INVALID_FIELD: () =>
-    'A requested field is not available at this API version. The affected time slice is not collected, and the source is marked partial (or degraded, if no slice succeeded) for the whole requested window — the manifest does not record which slice failed. Re-run against an org on a newer API version.',
+    'A requested field is not available at this API version. The affected time slice is not collected, and the source is marked partial (or degraded, if no slice succeeded). The slice bounds are recorded in the manifest; re-run against an org on a newer API version.',
   QUERY_TIMEOUT: () =>
     'The query exceeded the org query timeout for this time slice, and the slice could not be narrowed further (floor: one hour). The slice bounds are recorded in the manifest; re-run collect for that window when the org is less busy.',
   QUERY_TRUNCATED: () =>

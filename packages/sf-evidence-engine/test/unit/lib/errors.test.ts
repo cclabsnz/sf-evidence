@@ -86,3 +86,11 @@ describe('salesforceErrorCode', () => {
     expect(salesforceErrorCode('INVALID_TYPE')).toBeUndefined();
   });
 });
+
+describe('INVALID_FIELD remediation', () => {
+  it('says the failed slice bounds are recorded, as collectSliced records them', () => {
+    const r = classifyDegradation(sfApiError('INVALID_FIELD'), 'audit-trail')!.remediation;
+    expect(r).not.toMatch(/does not record which slice/);
+    expect(r).toMatch(/slice bounds are recorded/);
+  });
+});
